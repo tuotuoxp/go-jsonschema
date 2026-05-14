@@ -13,6 +13,7 @@ import (
 	testMinimum "github.com/tuotuoxp/go-jsonschema/tests/data/validation/minimum"
 	testMultipleOf "github.com/tuotuoxp/go-jsonschema/tests/data/validation/multipleOf"
 	testPattern "github.com/tuotuoxp/go-jsonschema/tests/data/validation/pattern"
+	testPatternRef "github.com/tuotuoxp/go-jsonschema/tests/data/validation/patternRef"
 	testPrimitiveDefs "github.com/tuotuoxp/go-jsonschema/tests/data/validation/primitive_defs"
 	testReadOnlyFields "github.com/tuotuoxp/go-jsonschema/tests/data/validation/readOnly"
 	testReadOnlyAndRequiredFields "github.com/tuotuoxp/go-jsonschema/tests/data/validation/readOnlyAndRequired"
@@ -281,6 +282,56 @@ func TestPattern(t *testing.T) {
 			t.Parallel()
 
 			model := testPattern.Pattern{}
+
+			err := json.Unmarshal([]byte(tC.data), &model)
+
+			helpers.CheckError(t, tC.wantErr, err)
+		})
+	}
+}
+
+// TestPatternRef verifies that pattern validation works when the property type is
+// defined via an external $ref (not inline). It tests both required and optional
+// fields to ensure the referenced type's UnmarshalJSON is invoked and validates
+// the pattern constraint.
+func TestPatternRef(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		desc    string
+		data    string
+		wantErr error
+	}{
+		{
+			desc: "no violations - required field matches pattern",
+			data: `{"myString": "valid-name"}`,
+		},
+		{
+			desc: "no violations - optional field matches pattern",
+			data: `{"myString": "valid-name", "myNullableString": "another.valid"}`,
+		},
+		{
+			desc:    "required field missing",
+			data:    `{}`,
+			wantErr: errors.New("field myString in PatternRef: required"),
+		},
+		{
+			desc:    "required field does not match pattern",
+			data:    `{"myString": "INVALID_NAME"}`,
+			wantErr: errors.New("field  pattern match: must match ^[a-z0-9.-]+$"),
+		},
+		{
+			desc:    "optional field does not match pattern",
+			data:    `{"myString": "valid-name", "myNullableString": "INVALID_NAME"}`,
+			wantErr: errors.New("field  pattern match: must match ^[a-z0-9.-]+$"),
+		},
+	}
+
+	for _, tC := range testCases {
+		t.Run(tC.desc, func(t *testing.T) {
+			t.Parallel()
+
+			model := testPatternRef.PatternRef{}
 
 			err := json.Unmarshal([]byte(tC.data), &model)
 
