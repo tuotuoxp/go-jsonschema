@@ -318,12 +318,12 @@ func TestPatternRef(t *testing.T) {
 		{
 			desc:    "required field does not match pattern",
 			data:    `{"myString": "INVALID_NAME"}`,
-			wantErr: errors.New("field  pattern match: must match ^[a-z0-9.-]+$"),
+			wantErr: errors.New("field Name pattern match: must match ^[a-z0-9.-]+$"),
 		},
 		{
 			desc:    "optional field does not match pattern",
 			data:    `{"myString": "valid-name", "myNullableString": "INVALID_NAME"}`,
-			wantErr: errors.New("field  pattern match: must match ^[a-z0-9.-]+$"),
+			wantErr: errors.New("field Name pattern match: must match ^[a-z0-9.-]+$"),
 		},
 	}
 
@@ -355,7 +355,7 @@ func TestPrimitiveDefs(t *testing.T) {
 		{
 			desc:    "myString too short",
 			data:    `{"myString": "hi"}`,
-			wantErr: errors.New("field  length: must be >= 5"),
+			wantErr: errors.New("field MinStr length: must be >= 5"),
 		},
 	}
 

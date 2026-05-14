@@ -482,9 +482,13 @@ func (v *stringValidator) generate(out *codegen.Emitter, format string) error {
 			v.pattern, pointerPrefix, value,
 		)
 		out.Indent(1)
+		patternErrorName := v.fieldName
+		if patternErrorName == "" {
+			patternErrorName = v.jsonName
+		}
 		out.Printlnf(
 			`return fmt.Errorf("field %%s pattern match: must match %%s", "%s", `+"`%s`"+`)`,
-			v.fieldName, v.pattern,
+			patternErrorName, v.pattern,
 		)
 		out.Indent(-1)
 		out.Printlnf("}")

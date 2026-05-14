@@ -17,7 +17,7 @@ func (j *Name) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if matched, _ := regexp.MatchString(`^[a-z0-9.-]+$`, string(plain)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "", `^[a-z0-9.-]+$`)
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[a-z0-9.-]+$`)
 	}
 	*j = Name(plain)
 	return nil
@@ -31,7 +31,7 @@ func (j *Name) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	if matched, _ := regexp.MatchString(`^[a-z0-9.-]+$`, string(plain)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "", `^[a-z0-9.-]+$`)
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[a-z0-9.-]+$`)
 	}
 	*j = Name(plain)
 	return nil

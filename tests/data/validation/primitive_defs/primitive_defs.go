@@ -17,7 +17,7 @@ func (j *MinStr) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if utf8.RuneCountInString(string(plain)) < 5 {
-		return fmt.Errorf("field %s length: must be >= %d", "", 5)
+		return fmt.Errorf("field %s length: must be >= %d", "MinStr", 5)
 	}
 	*j = MinStr(plain)
 	return nil
@@ -31,7 +31,7 @@ func (j *MinStr) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	if utf8.RuneCountInString(string(plain)) < 5 {
-		return fmt.Errorf("field %s length: must be >= %d", "", 5)
+		return fmt.Errorf("field %s length: must be >= %d", "MinStr", 5)
 	}
 	*j = MinStr(plain)
 	return nil

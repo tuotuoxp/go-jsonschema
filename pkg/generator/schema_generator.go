@@ -401,6 +401,7 @@ func (g *schemaGenerator) generateDeclaredType(t *schemas.Type, scope nameScope)
 
 	case codegen.PrimitiveType, *codegen.PrimitiveType:
 		validators = g.structFieldValidators(nil, codegen.StructField{
+			JSONName:   decl.Name,
 			Type:       tt,
 			SchemaType: t,
 		}, tt, false)
