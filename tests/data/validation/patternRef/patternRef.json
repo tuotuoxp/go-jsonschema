@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "https://example.com/patternRef",
+  "type": "object",
+  "properties": {
+    "myString": {
+      "$ref": "../patternRefExt/name.json"
+    },
+    "myNullableString": {
+      "$ref": "../patternRefExt/name.json"
+    }
+  },
+  "required": [
+    "myString"
+  ]
+}
