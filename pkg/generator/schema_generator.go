@@ -1301,6 +1301,7 @@ func cloneSchemaType(t *schemas.Type) *schemas.Type {
 	cloned.ExclusiveMinimum = cloneAnyPtr(t.ExclusiveMinimum)
 	cloned.AdditionalItems = cloneSchemaTypeNoErr(t.AdditionalItems)
 	cloned.Items = cloneSchemaTypeNoErr(t.Items)
+	cloned.Media = cloneSchemaTypeNoErr(t.Media)
 	cloned.Required = slices.Clone(t.Required)
 	cloned.Properties = cloneSchemaTypeMap(t.Properties)
 	cloned.PatternProperties = cloneSchemaTypeMap(t.PatternProperties)
