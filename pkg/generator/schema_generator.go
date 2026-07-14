@@ -1210,7 +1210,7 @@ func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
 
 	if _, err := g.resolveRef(prop); err != nil {
 		if errors.Is(err, errExpectedNamedType) {
-			_, cacheErr := g.cacheResolvedRefSchemaWithoutNamedType(prop)
+			cacheErr := g.cacheResolvedRefSchemaWithoutNamedType(prop)
 			if cacheErr == nil {
 				return
 			}
@@ -1222,18 +1222,18 @@ func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
 	}
 }
 
-func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type) (*schemas.Type, error) {
+func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type) error {
 	if t == nil || t.Ref == "" {
-		return t, nil
+		return nil
 	}
 
-	if schemaType, ok := g.schemaTypesByRef[t.Ref]; ok {
-		return schemaType, nil
+	if _, ok := g.schemaTypesByRef[t.Ref]; ok {
+		return nil
 	}
 
 	defName, fileName, err := g.extractRefNames(t)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errCannotResolveRef, err)
+		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
 	}
 
 	schema := g.schema
@@ -1242,12 +1242,12 @@ func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type
 	if fileName != "" {
 		schema, err = g.loader.Load(fileName, g.schemaFileName)
 		if err != nil {
-			return nil, fmt.Errorf("could not follow $ref %q to file %q: %w", t.Ref, fileName, err)
+			return fmt.Errorf("could not follow $ref %q to file %q: %w", t.Ref, fileName, err)
 		}
 
 		schemaFileName, err = schemas.QualifiedFileName(fileName, g.schemaFileName, g.config.ResolveExtensions)
 		if err != nil {
-			return nil, fmt.Errorf("could not resolve qualified file name for %s: %w", fileName, err)
+			return fmt.Errorf("could not resolve qualified file name for %s: %w", fileName, err)
 		}
 	}
 
@@ -1257,38 +1257,38 @@ func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type
 		var ok bool
 		referencedSchema, ok = schema.Definitions[defName]
 		if !ok {
-			return nil, fmt.Errorf("%w: %q (from ref %q)", errDefinitionDoesNotExistInSchema, defName, t.Ref)
+			return fmt.Errorf("%w: %q (from ref %q)", errDefinitionDoesNotExistInSchema, defName, t.Ref)
 		}
 	} else {
 		referencedSchema = (*schemas.Type)(schema.ObjectAsType)
 	}
 
 	if referencedSchema == nil {
-		return nil, fmt.Errorf("%w: %q", errCannotResolveRef, t.Ref)
+		return fmt.Errorf("%w: %q", errCannotResolveRef, t.Ref)
 	}
 
 	sg := newSchemaGenerator(g.Generator, schema, schemaFileName, g.output)
 
 	resolvedSchema, err := sg.resolveEffectiveRefSchema(referencedSchema)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errCannotResolveRef, err)
+		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
 	}
 
 	resolvedSchema, err = cloneSchemaType(resolvedSchema)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errCannotResolveRef, err)
+		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
 	}
 
 	if fileName != "" {
 		if err := resolvedSchema.ConvertAllRefs(schemaFileName); err != nil {
-			return nil, fmt.Errorf("convert refs: %w", err)
+			return fmt.Errorf("convert refs: %w", err)
 		}
 	}
 
 	resolvedSchema.Dereferenced = true
 	g.schemaTypesByRef[t.Ref] = resolvedSchema
 
-	return resolvedSchema, nil
+	return nil
 }
 
 func cloneSchemaType(t *schemas.Type) (*schemas.Type, error) {
