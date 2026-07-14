@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "media_id": {
+      "$ref": "media-id-wrapper.json"
+    }
+  }
+}
