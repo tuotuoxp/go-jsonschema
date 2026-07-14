@@ -323,7 +323,7 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 	}
 
 	if schemaType.XGoType != nil {
-		if xGoType := strings.TrimSpace(*schemaType.XGoType); xGoType != "" {
+		if xGoType := explicitXGoTypeName(*schemaType.XGoType); xGoType != "" {
 			return xGoType
 		}
 	}
@@ -337,6 +337,22 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 	}
 
 	return fallback
+}
+
+func explicitXGoTypeName(xGoType string) string {
+	xGoType = strings.TrimSpace(xGoType)
+	if xGoType == "" || !goIdentifierRe.MatchString(xGoType) {
+		return ""
+	}
+
+	switch xGoType {
+	case "any", "bool", "byte", "complex128", "complex64", "error", "float32", "float64",
+		"int", "int16", "int32", "int64", "int8", "rune", "string", "uint", "uint16",
+		"uint32", "uint64", "uint8", "uintptr":
+		return ""
+	default:
+		return xGoType
+	}
 }
 
 func (g *Generator) hasExplicitRefNamingOverride(schemaType *schemas.Type) bool {
@@ -1088,6 +1104,8 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 		}
 
 		if g.shouldKeepReferencedSchemaAsNamedType(def) {
+			g.cacheResolvedRefSchema(prop)
+
 			return prop, false
 		}
 
@@ -1124,6 +1142,8 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	// that error by continuing down the semantic-inline path; instead, fall back
 	// to the normal $ref handling path, which will surface the validation error.
 	if _, _, _, hasRefMapping, mappingErr := g.resolveReferencedXGoRefMappingForRef(prop); mappingErr != nil || hasRefMapping {
+		g.cacheResolvedRefSchema(prop)
+
 		return prop, false
 	}
 
@@ -1151,6 +1171,8 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	}
 
 	if g.shouldKeepReferencedSchemaAsNamedType(resolvedRefSchema) {
+		g.cacheResolvedRefSchema(prop)
+
 		return prop, false
 	}
 
@@ -1160,6 +1182,16 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	}
 
 	return g.applyLocalRefValidationOverride(resolvedRefSchema, prop), true
+}
+
+func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
+	if prop == nil || prop.Ref == "" {
+		return
+	}
+
+	if _, err := g.resolveRef(prop); err != nil {
+		g.warner(fmt.Sprintf("Could not cache resolved ref %q: %v", prop.Ref, err))
+	}
 }
 
 func (g *schemaGenerator) hasLocalRefValidationOverride(prop, resolvedRefSchema *schemas.Type) bool {
