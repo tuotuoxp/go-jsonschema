@@ -69,6 +69,85 @@ func TestResolveStructFieldSchemaTypeKeepsDereferencedCacheState(t *testing.T) {
 	require.True(t, cached.Dereferenced)
 }
 
+func TestCacheResolvedRefSchemaAcceptsCustomNameType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	consumerSchemaPath := filepath.Join(dir, "consumer.schema")
+	sharedSchemaPath := filepath.Join(dir, "shared.schema")
+
+	writeSchemaFile(t, sharedSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/shared/defs",
+  "$defs": {
+    "OrderIDBase": {
+      "type": "integer",
+      "format": "int64",
+      "minimum": 1
+    },
+    "OrderID": {
+      "x-go-ref": {
+        "path": "github.com/example/shared",
+        "alias": "shared"
+      },
+      "$ref": "#/$defs/OrderIDBase"
+    }
+  }
+}`)
+
+	writeSchemaFile(t, consumerSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/consumer",
+  "title": "Consumer",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "$ref": "./shared.schema#/$defs/OrderID"
+    }
+  }
+}`)
+
+	var warnings []string
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/consumer",
+			OutputName:  "consumer.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.Warner = func(msg string) {
+		warnings = append(warnings, msg)
+	}
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+
+	schema, err := gen.loader.Load(consumerSchemaPath, "")
+	require.NoError(t, err)
+
+	output, err := gen.findOutputFileForSchemaID(schema.ID)
+	require.NoError(t, err)
+
+	sg := newSchemaGenerator(gen, schema, consumerSchemaPath, output)
+	prop := schema.Properties["order_id"]
+
+	sg.cacheResolvedRefSchema(prop)
+
+	require.Empty(t, warnings)
+
+	cached := sg.schemaTypesByRef[prop.Ref]
+	require.NotNil(t, cached)
+	require.True(t, cached.Dereferenced)
+	require.NotNil(t, cached.Minimum)
+	require.Equal(t, 1.0, *cached.Minimum)
+	require.NotNil(t, cached.XGoRef)
+
+	resolved, err := sg.resolveRef(prop)
+	require.NoError(t, err)
+	require.Same(t, cached, resolved)
+}
+
 func TestDoFileRegeneratesPreviouslyReferencedSchemaAsRootTarget(t *testing.T) {
 	t.Parallel()
 
@@ -1567,6 +1646,76 @@ func TestGenerateXGoRefExternalPackageDefsRefObjectTypeStillImports(t *testing.T
 	require.Contains(t, generated, "shared.Order")
 	// Must NOT generate a local Order struct.
 	require.NotContains(t, generated, "type Order struct")
+}
+
+func TestGenerateXGoRefChainedDefsRefDoesNotWarnAndUsesStableImportedType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	consumerSchemaPath := filepath.Join(dir, "consumer.schema")
+	sharedSchemaPath := filepath.Join(dir, "shared.schema")
+
+	writeSchemaFile(t, sharedSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/shared/defs",
+  "$defs": {
+    "OrderIDBase": {
+      "type": "integer",
+      "format": "int64",
+      "minimum": 1
+    },
+    "OrderID": {
+      "x-go-ref": {
+        "path": "github.com/example/shared",
+        "alias": "shared"
+      },
+      "$ref": "#/$defs/OrderIDBase"
+    }
+  }
+}`)
+
+	writeSchemaFile(t, consumerSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/consumer",
+  "title": "Consumer",
+  "type": "object",
+  "properties": {
+    "primary_order_id": {
+      "$ref": "./shared.schema#/$defs/OrderID"
+    },
+    "secondary_order_id": {
+      "$ref": "./shared.schema#/$defs/OrderID"
+    }
+  },
+  "required": ["primary_order_id", "secondary_order_id"]
+}`)
+
+	var warnings []string
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/consumer",
+			OutputName:  "consumer.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.Warner = func(msg string) {
+		warnings = append(warnings, msg)
+	}
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(consumerSchemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+
+	generated := string(sources["consumer.go"])
+	require.Contains(t, generated, `shared "github.com/example/shared"`)
+	require.Contains(t, generated, "PrimaryOrderId shared.OrderID")
+	require.Contains(t, generated, "SecondaryOrderId shared.OrderID")
+	require.NotContains(t, generated, "type OrderID int64")
 }
 
 func writeSchemaFile(t *testing.T, path, contents string) {

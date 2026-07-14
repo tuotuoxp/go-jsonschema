@@ -1209,8 +1209,243 @@ func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
 	}
 
 	if _, err := g.resolveRef(prop); err != nil {
+		if errors.Is(err, errExpectedNamedType) {
+			cacheErr := g.cacheResolvedRefSchemaWithoutNamedType(prop)
+			if cacheErr == nil {
+				return
+			}
+
+			err = cacheErr
+		}
+
 		g.warner(fmt.Sprintf("Could not cache resolved ref %q: %v", prop.Ref, err))
 	}
+}
+
+func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type) error {
+	if t == nil || t.Ref == "" {
+		return nil
+	}
+
+	if _, ok := g.schemaTypesByRef[t.Ref]; ok {
+		return nil
+	}
+
+	defName, fileName, err := g.extractRefNames(t)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
+	}
+
+	schema := g.schema
+	schemaFileName := g.schemaFileName
+
+	if fileName != "" {
+		schema, err = g.loader.Load(fileName, g.schemaFileName)
+		if err != nil {
+			return fmt.Errorf("could not follow $ref %q to file %q: %w", t.Ref, fileName, err)
+		}
+
+		schemaFileName, err = schemas.QualifiedFileName(fileName, g.schemaFileName, g.config.ResolveExtensions)
+		if err != nil {
+			return fmt.Errorf("could not resolve qualified file name for %s: %w", fileName, err)
+		}
+	}
+
+	var referencedSchema *schemas.Type
+
+	if defName != "" {
+		var ok bool
+		referencedSchema, ok = schema.Definitions[defName]
+		if !ok {
+			return fmt.Errorf("%w: %q (from ref %q)", errDefinitionDoesNotExistInSchema, defName, t.Ref)
+		}
+	} else {
+		referencedSchema = (*schemas.Type)(schema.ObjectAsType)
+	}
+
+	if referencedSchema == nil {
+		return fmt.Errorf("%w: %q", errCannotResolveRef, t.Ref)
+	}
+
+	sg := newSchemaGenerator(g.Generator, schema, schemaFileName, g.output)
+
+	resolvedSchema, err := sg.resolveEffectiveRefSchema(referencedSchema)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
+	}
+
+	resolvedSchema = cloneSchemaType(resolvedSchema)
+
+	if fileName != "" {
+		if err := resolvedSchema.ConvertAllRefs(schemaFileName); err != nil {
+			return fmt.Errorf("convert refs: %w", err)
+		}
+	}
+
+	resolvedSchema.Dereferenced = true
+	g.schemaTypesByRef[t.Ref] = resolvedSchema
+
+	return nil
+}
+
+func cloneSchemaType(t *schemas.Type) *schemas.Type {
+	if t == nil {
+		return nil
+	}
+
+	cloned := *t
+	cloned.MultipleOf = cloneFloat64Ptr(t.MultipleOf)
+	cloned.Maximum = cloneFloat64Ptr(t.Maximum)
+	cloned.ExclusiveMaximum = cloneAnyPtr(t.ExclusiveMaximum)
+	cloned.Minimum = cloneFloat64Ptr(t.Minimum)
+	cloned.ExclusiveMinimum = cloneAnyPtr(t.ExclusiveMinimum)
+	cloned.AdditionalItems = cloneSchemaTypeNoErr(t.AdditionalItems)
+	cloned.Items = cloneSchemaTypeNoErr(t.Items)
+	cloned.Media = cloneSchemaTypeNoErr(t.Media)
+	cloned.Required = slices.Clone(t.Required)
+	cloned.Properties = cloneSchemaTypeMap(t.Properties)
+	cloned.PatternProperties = cloneSchemaTypeMap(t.PatternProperties)
+	cloned.AdditionalProperties = cloneSchemaTypeNoErr(t.AdditionalProperties)
+	cloned.Enum = slices.Clone(t.Enum)
+	cloned.Type = slices.Clone(t.Type)
+	cloned.AllOf = cloneSchemaTypeSlice(t.AllOf)
+	cloned.AnyOf = cloneSchemaTypeSlice(t.AnyOf)
+	cloned.OneOf = cloneSchemaTypeSlice(t.OneOf)
+	cloned.Not = cloneSchemaTypeNoErr(t.Not)
+	cloned.DependentRequired = cloneStringSliceMap(t.DependentRequired)
+	cloned.Definitions = cloneDefinitions(t.Definitions)
+	cloned.DependentSchemas = cloneSchemaTypeMap(t.DependentSchemas)
+	cloned.GoJSONSchemaExtension = cloneGoJSONSchemaExtension(t.GoJSONSchemaExtension)
+	cloned.XGoType = cloneStringPtr(t.XGoType)
+	cloned.XGoRef = cloneXGoRefExtension(t.XGoRef)
+	cloned.GoOneOfEnvelope = cloneGoOneOfEnvelopeExtension(t.GoOneOfEnvelope)
+
+	return &cloned
+}
+
+func cloneSchemaTypeNoErr(t *schemas.Type) *schemas.Type {
+	return cloneSchemaType(t)
+}
+
+func cloneSchemaTypeSlice(types []*schemas.Type) []*schemas.Type {
+	if types == nil {
+		return nil
+	}
+
+	cloned := make([]*schemas.Type, len(types))
+	for i, typ := range types {
+		cloned[i] = cloneSchemaTypeNoErr(typ)
+	}
+
+	return cloned
+}
+
+func cloneSchemaTypeMap(m map[string]*schemas.Type) map[string]*schemas.Type {
+	if m == nil {
+		return nil
+	}
+
+	cloned := make(map[string]*schemas.Type, len(m))
+	for key, value := range m {
+		cloned[key] = cloneSchemaTypeNoErr(value)
+	}
+
+	return cloned
+}
+
+func cloneDefinitions(defs schemas.Definitions) schemas.Definitions {
+	if defs == nil {
+		return nil
+	}
+
+	cloned := make(schemas.Definitions, len(defs))
+	for key, value := range defs {
+		cloned[key] = cloneSchemaTypeNoErr(value)
+	}
+
+	return cloned
+}
+
+func cloneStringSliceMap(m map[string][]string) map[string][]string {
+	if m == nil {
+		return nil
+	}
+
+	cloned := make(map[string][]string, len(m))
+	for key, value := range m {
+		cloned[key] = slices.Clone(value)
+	}
+
+	return cloned
+}
+
+func cloneGoJSONSchemaExtension(ext *schemas.GoJSONSchemaExtension) *schemas.GoJSONSchemaExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+	cloned.Type = cloneStringPtr(ext.Type)
+	cloned.Identifier = cloneStringPtr(ext.Identifier)
+	cloned.Pointer = cloneBoolPtr(ext.Pointer)
+	cloned.Imports = slices.Clone(ext.Imports)
+	cloned.ExtraTags = cloneStringMap(ext.ExtraTags)
+
+	return &cloned
+}
+
+func cloneXGoRefExtension(ext *schemas.XGoRefExtension) *schemas.XGoRefExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+
+	return &cloned
+}
+
+func cloneGoOneOfEnvelopeExtension(ext *schemas.GoOneOfEnvelopeExtension) *schemas.GoOneOfEnvelopeExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+	cloned.Mapping = cloneStringMap(ext.Mapping)
+
+	return &cloned
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(m))
+	for key, value := range m {
+		cloned[key] = value
+	}
+
+	return cloned
+}
+
+func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+
+	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+
+	return &cloned
 }
 
 func (g *schemaGenerator) hasLocalRefValidationOverride(prop, resolvedRefSchema *schemas.Type) bool {
