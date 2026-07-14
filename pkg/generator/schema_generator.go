@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -95,7 +96,7 @@ func (g *schemaGenerator) generateRootType() error {
 	}
 
 	// Schema with an empty type list: nothing to generate for the root type.
-	if len(g.schema.Type) == 0 {
+	if len(g.schema.Type) == 0 && g.schema.Ref == "" {
 		return nil
 	}
 
@@ -211,12 +212,19 @@ func (g *schemaGenerator) generateReferencedType(t *schemas.Type) (codegen.Type,
 			return nil, err
 		}
 	} else {
-		def = (*schemas.Type)(schema.ObjectAsType)
+		rootType := (*schemas.Type)(schema.ObjectAsType)
+		if rootType == nil {
+			return nil, errSchemaHasNoRoot
+		}
+
+		def = rootType
 		defName = g.getRootTypeName(schema, fileName)
 
-		if len(def.Type) == 0 {
+		if len(def.Type) == 0 && def.Ref == "" {
 			// Minor hack to make definitions default to being objects.
-			def.Type = schemas.TypeList{schemas.TypeNameObject}
+			rootTypeCopy := *def
+			rootTypeCopy.Type = schemas.TypeList{schemas.TypeNameObject}
+			def = &rootTypeCopy
 		}
 	}
 
@@ -309,8 +317,65 @@ func (g *schemaGenerator) extractRefNames(t *schemas.Type) (string, string, erro
 	return defName, fileName, nil
 }
 
+func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback string) string {
+	if schemaType == nil {
+		return fallback
+	}
+
+	if schemaType.XGoType != nil {
+		if xGoType := explicitXGoTypeName(*schemaType.XGoType); xGoType != "" {
+			return xGoType
+		}
+	}
+
+	if schemaType.Ref != "" && schemaType.Title != "" {
+		return g.caser.Identifierize(schemaType.Title)
+	}
+
+	if g.config.StructNameFromTitle && schemaType.Title != "" {
+		return g.caser.Identifierize(schemaType.Title)
+	}
+
+	return fallback
+}
+
+func explicitXGoTypeName(xGoType string) string {
+	xGoType = strings.TrimSpace(xGoType)
+	if xGoType == "" || !goIdentifierRe.MatchString(xGoType) {
+		return ""
+	}
+
+	switch xGoType {
+	case "any", "bool", "byte", "complex128", "complex64", "error", "float32", "float64",
+		"int", "int16", "int32", "int64", "int8", "rune", "string", "uint", "uint16",
+		"uint32", "uint64", "uint8", "uintptr":
+		return ""
+	default:
+		return xGoType
+	}
+}
+
+func (g *Generator) hasExplicitRefNamingOverride(schemaType *schemas.Type) bool {
+	if schemaType == nil || schemaType.Ref == "" {
+		return false
+	}
+
+	if schemaType.XGoType != nil {
+		if explicitXGoTypeName(*schemaType.XGoType) != "" {
+			return true
+		}
+	}
+
+	return schemaType.Title != ""
+}
+
 //nolint:gocyclo // todo: reduce cyclomatic complexity
 func (g *schemaGenerator) generateDeclaredType(t *schemas.Type, scope nameScope) (codegen.Type, error) {
+	t, err := g.resolveDeclaredSchemaType(t)
+	if err != nil {
+		return nil, err
+	}
+
 	if decl, ok := g.output.declsBySchema[t]; ok {
 		if t.Dereferenced {
 			if decl.Name != scope.string() {
@@ -355,8 +420,8 @@ func (g *schemaGenerator) generateDeclaredType(t *schemas.Type, scope nameScope)
 
 	name := g.output.uniqueTypeName(scope)
 
-	if g.config.StructNameFromTitle && t.Title != "" {
-		name = g.caser.Identifierize(t.Title)
+	if resolvedName := g.resolveSchemaTypeName(t, ""); resolvedName != "" {
+		name = resolvedName
 	}
 
 	decl := codegen.TypeDecl{
@@ -481,6 +546,14 @@ func (g *schemaGenerator) generateDeclaredType(t *schemas.Type, scope nameScope)
 	}
 
 	return &codegen.NamedType{Decl: &decl}, nil
+}
+
+func (g *schemaGenerator) resolveDeclaredSchemaType(t *schemas.Type) (*schemas.Type, error) {
+	if t == nil || t.Ref == "" || !g.hasExplicitRefNamingOverride(t) {
+		return t, nil
+	}
+
+	return g.resolveEffectiveRefSchema(t)
 }
 
 //nolint:gocyclo // todo: reduce cyclomatic complexity
@@ -1033,6 +1106,8 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 		}
 
 		if g.shouldKeepReferencedSchemaAsNamedType(def) {
+			g.cacheResolvedRefSchema(prop)
+
 			return prop, false
 		}
 
@@ -1069,6 +1144,8 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	// that error by continuing down the semantic-inline path; instead, fall back
 	// to the normal $ref handling path, which will surface the validation error.
 	if _, _, _, hasRefMapping, mappingErr := g.resolveReferencedXGoRefMappingForRef(prop); mappingErr != nil || hasRefMapping {
+		g.cacheResolvedRefSchema(prop)
+
 		return prop, false
 	}
 
@@ -1096,6 +1173,8 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	}
 
 	if g.shouldKeepReferencedSchemaAsNamedType(resolvedRefSchema) {
+		g.cacheResolvedRefSchema(prop)
+
 		return prop, false
 	}
 
@@ -1105,6 +1184,16 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	}
 
 	return g.applyLocalRefValidationOverride(resolvedRefSchema, prop), true
+}
+
+func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
+	if prop == nil || prop.Ref == "" {
+		return
+	}
+
+	if _, err := g.resolveRef(prop); err != nil {
+		g.warner(fmt.Sprintf("Could not cache resolved ref %q: %v", prop.Ref, err))
+	}
 }
 
 func (g *schemaGenerator) hasLocalRefValidationOverride(prop, resolvedRefSchema *schemas.Type) bool {
@@ -1191,6 +1280,120 @@ func (g *schemaGenerator) applyLocalRefValidationOverride(resolvedRefSchema, pro
 	return &effectiveSchema
 }
 
+func (g *schemaGenerator) resolveEffectiveRefSchema(t *schemas.Type) (*schemas.Type, error) {
+	if t == nil || t.Ref == "" {
+		return t, nil
+	}
+
+	// Detect cycles to prevent unbounded recursion on cyclic $ref chains.
+	isCycle, cleanupCycle, err := g.detectCycle(t)
+	if err != nil {
+		return nil, err
+	}
+	if isCycle {
+		return t, nil
+	}
+	defer cleanupCycle()
+
+	defName, fileName, err := g.extractRefNames(t)
+	if err != nil {
+		return nil, err
+	}
+
+	schema := g.schema
+	schemaFileName := g.schemaFileName
+
+	if fileName != "" {
+		schema, err = g.loader.Load(fileName, g.schemaFileName)
+		if err != nil {
+			return nil, fmt.Errorf("could not follow $ref %q to file %q: %w", t.Ref, fileName, err)
+		}
+
+		schemaFileName, err = schemas.QualifiedFileName(fileName, g.schemaFileName, g.config.ResolveExtensions)
+		if err != nil {
+			return nil, fmt.Errorf("could not resolve qualified file name for %s: %w", fileName, err)
+		}
+	}
+
+	var referencedSchema *schemas.Type
+
+	if defName != "" {
+		var ok bool
+		referencedSchema, ok = schema.Definitions[defName]
+		if !ok {
+			return nil, fmt.Errorf("%w: %q (from ref %q)", errDefinitionDoesNotExistInSchema, defName, t.Ref)
+		}
+	} else {
+		referencedSchema = (*schemas.Type)(schema.ObjectAsType)
+	}
+
+	if referencedSchema == nil {
+		return nil, fmt.Errorf("%w: %q", errCannotResolveRef, t.Ref)
+	}
+
+	sg := newSchemaGenerator(g.Generator, schema, schemaFileName, g.output)
+
+	effectiveReferencedSchema, err := sg.resolveEffectiveRefSchema(referencedSchema)
+	if err != nil {
+		return nil, err
+	}
+
+	if effectiveReferencedSchema == nil {
+		return nil, fmt.Errorf("%w: %q", errCannotResolveRef, t.Ref)
+	}
+
+	if fileName != "" {
+		referencedCopy := *effectiveReferencedSchema
+		if err := referencedCopy.ConvertAllRefs(schemaFileName); err != nil {
+			return nil, fmt.Errorf("convert refs: %w", err)
+		}
+
+		effectiveReferencedSchema = &referencedCopy
+	}
+
+	return mergeEffectiveRefSchema(effectiveReferencedSchema, t)
+}
+
+func mergeEffectiveRefSchema(baseSchema, overrideSchema *schemas.Type) (*schemas.Type, error) {
+	baseRaw, err := json.Marshal(baseSchema)
+	if err != nil {
+		return nil, err
+	}
+
+	overrideRaw, err := json.Marshal(overrideSchema)
+	if err != nil {
+		return nil, err
+	}
+
+	var base map[string]any
+	if err := json.Unmarshal(baseRaw, &base); err != nil {
+		return nil, err
+	}
+
+	var override map[string]any
+	if err := json.Unmarshal(overrideRaw, &override); err != nil {
+		return nil, err
+	}
+
+	delete(override, "$ref")
+
+	for key, value := range override {
+		base[key] = value
+	}
+
+	mergedRaw, err := json.Marshal(base)
+	if err != nil {
+		return nil, err
+	}
+
+	var merged schemas.Type
+	if err := json.Unmarshal(mergedRaw, &merged); err != nil {
+		return nil, err
+	}
+
+	return &merged, nil
+}
+
 func (g *schemaGenerator) resolveReferencedXGoRefMappingForRef(
 	refType *schemas.Type,
 ) (string, string, string, bool, error) {
@@ -1237,15 +1440,7 @@ func (g *schemaGenerator) resolveReferencedDefinitionTypeName(
 	definition *schemas.Type,
 	fallback string,
 ) (string, error) {
-	if definition == nil {
-		return fallback, nil
-	}
-
-	if g.config.StructNameFromTitle && definition.Title != "" {
-		return g.caser.Identifierize(definition.Title), nil
-	}
-
-	return fallback, nil
+	return g.resolveSchemaTypeName(definition, fallback), nil
 }
 
 func (g *schemaGenerator) resolveReferencedXGoRefMapping(
