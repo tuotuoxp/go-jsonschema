@@ -1869,7 +1869,7 @@ func TestRefNamingOwnershipRules(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorIs(t, err, errRefNamingOwnership)
 		require.Contains(t, err.Error(), `wrapper "UnnamedWrapper" is unnamed`)
-		require.Contains(t, err.Error(), `title/x-go-type/x-go-ref`)
+		require.Contains(t, err.Error(), `title/x-go-type/x-go-ref/goJSONSchema.type`)
 	})
 
 	// Rule 1 variant: unnamed wrapper, x-go-type target → error.

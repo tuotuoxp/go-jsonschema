@@ -27,8 +27,8 @@ var (
 	//nolint: gochecknoglobals // global to avoid duplication
 	arrayTypeVal = codegen.ArrayType{Type: emptyInterfaceTypeVal}
 
-	errEmptyInAnyOf      = errors.New("cannot have empty anyOf array")
-	errRefNamingOwnership = errors.New("invalid $ref naming")
+	errEmptyInAnyOf       = errors.New("cannot have empty anyOf array")
+	errRefNamingOwnership = errors.New("invalid $ref naming ownership")
 
 	//nolint:gochecknoglobals // compiled once for schema extension validation
 	goIdentifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -2739,7 +2739,7 @@ func (g *schemaGenerator) validateRefNamingOwnership(wrapper *schemas.Type, wrap
 		// Rule 1: unnamed wrapper referencing a named target – hard error.
 		return fmt.Errorf(
 			"%w: wrapper %q is unnamed, but referenced schema %q defines name metadata "+
-				"(title/x-go-type/x-go-ref); add explicit naming on wrapper or remove naming from target",
+				"(title/x-go-type/x-go-ref/goJSONSchema.type); add explicit naming on wrapper or remove naming from target",
 			errRefNamingOwnership, wrapperDesc, wrapper.Ref,
 		)
 
