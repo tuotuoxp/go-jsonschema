@@ -360,8 +360,10 @@ func (g *Generator) hasExplicitRefNamingOverride(schemaType *schemas.Type) bool 
 		return false
 	}
 
-	if schemaType.XGoType != nil && strings.TrimSpace(*schemaType.XGoType) != "" {
-		return true
+	if schemaType.XGoType != nil {
+		if explicitXGoTypeName(*schemaType.XGoType) != "" {
+			return true
+		}
 	}
 
 	return schemaType.Title != ""
