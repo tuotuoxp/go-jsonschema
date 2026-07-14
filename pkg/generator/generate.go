@@ -33,16 +33,16 @@ var (
 )
 
 type Generator struct {
-	caser        *text.Caser
-	config       Config
-	inScope      map[qualifiedDefinition]struct{}
-	outputs      map[string]*output
-	rootSchemaID map[string]struct{}
+	caser              *text.Caser
+	config             Config
+	inScope            map[qualifiedDefinition]struct{}
+	outputs            map[string]*output
+	rootSchemaID       map[string]struct{}
 	rootSchemaFileName map[string]struct{}
-	warner       func(string)
-	formatters   []formatter
-	loader       schemas.Loader
-	minimalNames bool
+	warner             func(string)
+	formatters         []formatter
+	loader             schemas.Loader
+	minimalNames       bool
 }
 
 type qualifiedDefinition struct {
@@ -61,16 +61,16 @@ func New(config Config) (*Generator, error) {
 	}
 
 	generator := &Generator{
-		caser:        text.NewCaser(config.Capitalizations, config.ResolveExtensions),
-		config:       config,
-		inScope:      map[qualifiedDefinition]struct{}{},
-		outputs:      map[string]*output{},
-		rootSchemaID: map[string]struct{}{},
+		caser:              text.NewCaser(config.Capitalizations, config.ResolveExtensions),
+		config:             config,
+		inScope:            map[qualifiedDefinition]struct{}{},
+		outputs:            map[string]*output{},
+		rootSchemaID:       map[string]struct{}{},
 		rootSchemaFileName: map[string]struct{}{},
-		warner:       config.Warner,
-		formatters:   formatters,
-		loader:       config.Loader,
-		minimalNames: config.MinimalNames,
+		warner:             config.Warner,
+		formatters:         formatters,
+		loader:             config.Loader,
+		minimalNames:       config.MinimalNames,
 	}
 
 	if config.Loader == nil {
@@ -195,11 +195,9 @@ func (g *Generator) getRootTypeName(schema *schemas.Schema, fileName string) str
 		}
 	}
 
-	if g.config.StructNameFromTitle && schema.Title != "" {
-		return g.caser.Identifierize(schema.Title)
-	}
+	fallback := g.caser.IdentifierFromFileName(fileName)
 
-	return g.caser.IdentifierFromFileName(fileName)
+	return g.resolveSchemaTypeName((*schemas.Type)(schema.ObjectAsType), fallback)
 }
 
 func (g *Generator) findOutputFileForSchemaID(id string) (*output, error) {
