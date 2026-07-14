@@ -1718,6 +1718,90 @@ func TestGenerateXGoRefChainedDefsRefDoesNotWarnAndUsesStableImportedType(t *tes
 	require.NotContains(t, generated, "type OrderID int64")
 }
 
+func TestGenerateExternalRefWithTitleAndMultipleUsesNoDuplicate(t *testing.T) {
+	t.Parallel()
+
+	// Regression: when an external $defs entry has both a "$ref" and a "title"
+	// (making it a named-type wrapper), and two or more properties in the
+	// consuming schema reference the same definition, the generator used to emit
+	//
+	//   Warning: Multiple types map to the name "BucketType";
+	//            declaring duplicate as "BucketType_1" instead
+	//
+	// because generateRootType (called from AddFile) registered the resolved
+	// schema as "BucketType", then generateReferencedType called
+	// generateDeclaredType again for the same definition.  The second call
+	// created a fresh merged schema whose Dereferenced flag differed from the
+	// already-registered one (which resolveRef had set to true), causing the
+	// cmp.Equal dedup check to fail.
+	dir := t.TempDir()
+	typesSchemaPath := filepath.Join(dir, "types.schema.json")
+	mainSchemaPath := filepath.Join(dir, "main.schema.json")
+
+	writeSchemaFile(t, typesSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/types",
+  "$defs": {
+    "BucketBase": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "BucketType": {
+      "title": "BucketType",
+      "$ref": "#/$defs/BucketBase"
+    }
+  }
+}`)
+
+	writeSchemaFile(t, mainSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/main",
+  "title": "Main",
+  "type": "object",
+  "properties": {
+    "bucket_a": {
+      "$ref": "./types.schema.json#/$defs/BucketType"
+    },
+    "bucket_b": {
+      "$ref": "./types.schema.json#/$defs/BucketType"
+    }
+  },
+  "required": ["bucket_a", "bucket_b"]
+}`)
+
+	var warnings []string
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/main",
+			OutputName:  "main.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.Warner = func(msg string) {
+		warnings = append(warnings, msg)
+	}
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(mainSchemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	// No duplicate-name warning should have been emitted.
+	require.Empty(t, warnings, "unexpected warnings: %v", warnings)
+
+	// BucketType should be declared exactly once; no BucketType_1 alias.
+	allSource := ""
+	for _, src := range sources {
+		allSource += string(src)
+	}
+
+	require.Contains(t, allSource, "type BucketType int")
+	require.NotContains(t, allSource, "BucketType_1")
+}
+
 func writeSchemaFile(t *testing.T, path, contents string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
