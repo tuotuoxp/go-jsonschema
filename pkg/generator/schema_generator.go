@@ -1210,11 +1210,12 @@ func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
 
 	if _, err := g.resolveRef(prop); err != nil {
 		if errors.Is(err, errExpectedNamedType) {
-			if _, cacheErr := g.cacheResolvedRefSchemaWithoutNamedType(prop); cacheErr == nil {
+			_, cacheErr := g.cacheResolvedRefSchemaWithoutNamedType(prop)
+			if cacheErr == nil {
 				return
-			} else {
-				err = cacheErr
 			}
+
+			err = cacheErr
 		}
 
 		g.warner(fmt.Sprintf("Could not cache resolved ref %q: %v", prop.Ref, err))
