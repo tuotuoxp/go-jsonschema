@@ -1274,10 +1274,7 @@ func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type
 		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
 	}
 
-	resolvedSchema, err = cloneSchemaType(resolvedSchema)
-	if err != nil {
-		return fmt.Errorf("%w: %w", errCannotResolveRef, err)
-	}
+	resolvedSchema = cloneSchemaType(resolvedSchema)
 
 	if fileName != "" {
 		if err := resolvedSchema.ConvertAllRefs(schemaFileName); err != nil {
@@ -1291,18 +1288,183 @@ func (g *schemaGenerator) cacheResolvedRefSchemaWithoutNamedType(t *schemas.Type
 	return nil
 }
 
-func cloneSchemaType(t *schemas.Type) (*schemas.Type, error) {
-	raw, err := json.Marshal(t)
-	if err != nil {
-		return nil, err
+func cloneSchemaType(t *schemas.Type) *schemas.Type {
+	if t == nil {
+		return nil
 	}
 
-	var cloned schemas.Type
-	if err := json.Unmarshal(raw, &cloned); err != nil {
-		return nil, err
+	cloned := *t
+	cloned.MultipleOf = cloneFloat64Ptr(t.MultipleOf)
+	cloned.Maximum = cloneFloat64Ptr(t.Maximum)
+	cloned.ExclusiveMaximum = cloneAnyPtr(t.ExclusiveMaximum)
+	cloned.Minimum = cloneFloat64Ptr(t.Minimum)
+	cloned.ExclusiveMinimum = cloneAnyPtr(t.ExclusiveMinimum)
+	cloned.AdditionalItems = cloneSchemaTypeNoErr(t.AdditionalItems)
+	cloned.Items = cloneSchemaTypeNoErr(t.Items)
+	cloned.Required = slices.Clone(t.Required)
+	cloned.Properties = cloneSchemaTypeMap(t.Properties)
+	cloned.PatternProperties = cloneSchemaTypeMap(t.PatternProperties)
+	cloned.AdditionalProperties = cloneSchemaTypeNoErr(t.AdditionalProperties)
+	cloned.Enum = slices.Clone(t.Enum)
+	cloned.Type = slices.Clone(t.Type)
+	cloned.AllOf = cloneSchemaTypeSlice(t.AllOf)
+	cloned.AnyOf = cloneSchemaTypeSlice(t.AnyOf)
+	cloned.OneOf = cloneSchemaTypeSlice(t.OneOf)
+	cloned.Not = cloneSchemaTypeNoErr(t.Not)
+	cloned.DependentRequired = cloneStringSliceMap(t.DependentRequired)
+	cloned.Definitions = cloneDefinitions(t.Definitions)
+	cloned.DependentSchemas = cloneSchemaTypeMap(t.DependentSchemas)
+	cloned.GoJSONSchemaExtension = cloneGoJSONSchemaExtension(t.GoJSONSchemaExtension)
+	cloned.XGoType = cloneStringPtr(t.XGoType)
+	cloned.XGoRef = cloneXGoRefExtension(t.XGoRef)
+	cloned.GoOneOfEnvelope = cloneGoOneOfEnvelopeExtension(t.GoOneOfEnvelope)
+
+	return &cloned
+}
+
+func cloneSchemaTypeNoErr(t *schemas.Type) *schemas.Type {
+	return cloneSchemaType(t)
+}
+
+func cloneSchemaTypeSlice(types []*schemas.Type) []*schemas.Type {
+	if types == nil {
+		return nil
 	}
 
-	return &cloned, nil
+	cloned := make([]*schemas.Type, len(types))
+	for i, typ := range types {
+		cloned[i] = cloneSchemaTypeNoErr(typ)
+	}
+
+	return cloned
+}
+
+func cloneSchemaTypeMap(m map[string]*schemas.Type) map[string]*schemas.Type {
+	if m == nil {
+		return nil
+	}
+
+	cloned := make(map[string]*schemas.Type, len(m))
+	for key, value := range m {
+		cloned[key] = cloneSchemaTypeNoErr(value)
+	}
+
+	return cloned
+}
+
+func cloneDefinitions(defs schemas.Definitions) schemas.Definitions {
+	if defs == nil {
+		return nil
+	}
+
+	cloned := make(schemas.Definitions, len(defs))
+	for key, value := range defs {
+		cloned[key] = cloneSchemaTypeNoErr(value)
+	}
+
+	return cloned
+}
+
+func cloneStringSliceMap(m map[string][]string) map[string][]string {
+	if m == nil {
+		return nil
+	}
+
+	cloned := make(map[string][]string, len(m))
+	for key, value := range m {
+		cloned[key] = slices.Clone(value)
+	}
+
+	return cloned
+}
+
+func cloneGoJSONSchemaExtension(ext *schemas.GoJSONSchemaExtension) *schemas.GoJSONSchemaExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+	cloned.Type = cloneStringPtr(ext.Type)
+	cloned.Identifier = cloneStringPtr(ext.Identifier)
+	cloned.Pointer = cloneBoolPtr(ext.Pointer)
+	cloned.Imports = slices.Clone(ext.Imports)
+	cloned.ExtraTags = cloneStringMap(ext.ExtraTags)
+
+	return &cloned
+}
+
+func cloneXGoRefExtension(ext *schemas.XGoRefExtension) *schemas.XGoRefExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+
+	return &cloned
+}
+
+func cloneGoOneOfEnvelopeExtension(ext *schemas.GoOneOfEnvelopeExtension) *schemas.GoOneOfEnvelopeExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+	cloned.Mapping = cloneStringMap(ext.Mapping)
+
+	return &cloned
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(m))
+	for key, value := range m {
+		cloned[key] = value
+	}
+
+	return cloned
+}
+
+func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+
+	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+
+	return &cloned
+}
+
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+
+	return &cloned
+}
+
+func cloneAnyPtr(value *any) *any {
+	if value == nil {
+		return nil
+	}
+
+	cloned := *value
+
+	return &cloned
 }
 
 func (g *schemaGenerator) hasLocalRefValidationOverride(prop, resolvedRefSchema *schemas.Type) bool {
