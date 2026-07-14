@@ -1285,6 +1285,16 @@ func (g *schemaGenerator) resolveEffectiveRefSchema(t *schemas.Type) (*schemas.T
 		return t, nil
 	}
 
+	// Detect cycles to prevent unbounded recursion on cyclic $ref chains.
+	isCycle, cleanupCycle, err := g.detectCycle(t)
+	if err != nil {
+		return nil, err
+	}
+	if isCycle {
+		return t, nil
+	}
+	defer cleanupCycle()
+
 	defName, fileName, err := g.extractRefNames(t)
 	if err != nil {
 		return nil, err
