@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/refNamingOwnershipBranch2",
+  "type": "object",
+  "properties": {
+    "field": { "$ref": "#/$defs/WrapperWithName" }
+  },
+  "$defs": {
+    "NamedTarget": {
+      "title": "NamedTarget",
+      "type": "string",
+      "pattern": "^[a-z]+$"
+    },
+    "WrapperWithName": {
+      "title": "WrapperWithName",
+      "$ref": "#/$defs/NamedTarget"
+    }
+  }
+}
