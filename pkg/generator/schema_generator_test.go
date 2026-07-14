@@ -329,9 +329,12 @@ func TestGenerateObjectPropertyUsesEffectiveRefOverrideName(t *testing.T) {
 	require.NotContains(t, refSource, "type IdSchema int64")
 }
 
-func TestGenerateChainedRefWithoutOverridesKeepsFallbackName(t *testing.T) {
+func TestGenerateChainedRefWithoutOverridesProducesInlinePrimitive(t *testing.T) {
 	t.Parallel()
 
+	// Regression: chained $ref without any naming override (title / x-go-type)
+	// must stay transparent and produce an inline primitive field, not a
+	// materialised fallback alias (e.g. "IdSchema").
 	dir := t.TempDir()
 	idSchemaPath := filepath.Join(dir, "id.schema.json")
 	mediaIDSchemaPath := filepath.Join(dir, "media-id.schema.json")
@@ -386,10 +389,13 @@ func TestGenerateChainedRefWithoutOverridesKeepsFallbackName(t *testing.T) {
 	require.NoError(t, err)
 
 	generated := string(sources["example.go"])
-	refSource := string(sources["default.go"])
-	require.Contains(t, refSource, "type IdSchema int64")
-	require.Contains(t, generated, "MediaId IdSchema `json:\"media_id\" yaml:\"media_id\" mapstructure:\"media_id\"`")
-	require.NotContains(t, refSource, "type MediaID int64")
+	// No IdSchema alias should be materialised in any output file.
+	require.NotContains(t, generated, "IdSchema")
+	require.NotContains(t, string(sources["default.go"]), "type IdSchema int64")
+	// Field must be the inline primitive, not a named alias.
+	require.Contains(t, generated, "MediaId int64 `json:\"media_id\" yaml:\"media_id\" mapstructure:\"media_id\"`")
+	// Minimum validation must be preserved.
+	require.Contains(t, generated, "if 1 > plain.MediaId {")
 }
 
 func TestGenerateOneOfEnvelopeOptionalFieldUsesPointerAssignment(t *testing.T) {

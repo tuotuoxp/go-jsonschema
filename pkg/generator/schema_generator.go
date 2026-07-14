@@ -1172,6 +1172,23 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 		resolvedRefSchema = (*schemas.Type)(schema.ObjectAsType)
 	}
 
+	// Phase 3: if the resolved schema itself has a $ref and carries no explicit
+	// naming override (title / x-go-type), follow the chain to discover the
+	// effective terminal type.  This handles "pure-forwarding wrapper" files
+	// whose sole content is another $ref (chained $ref without naming intent).
+	// resolveEffectiveRefSchema merges all intermediate schemas without
+	// materialising any intermediate named declarations, so it is safe to call
+	// here from the read-ahead path.
+	if resolvedRefSchema.Ref != "" && !g.shouldKeepReferencedSchemaAsNamedType(resolvedRefSchema) {
+		qualified, qerr := schemas.QualifiedFileName(fileName, g.schemaFileName, g.config.ResolveExtensions)
+		if qerr == nil {
+			sg := newSchemaGenerator(g.Generator, schema, qualified, g.output)
+			if terminal, terr := sg.resolveEffectiveRefSchema(resolvedRefSchema); terr == nil && terminal != nil {
+				resolvedRefSchema = terminal
+			}
+		}
+	}
+
 	if g.shouldKeepReferencedSchemaAsNamedType(resolvedRefSchema) {
 		g.cacheResolvedRefSchema(prop)
 
