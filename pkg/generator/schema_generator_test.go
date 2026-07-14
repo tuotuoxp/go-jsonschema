@@ -1800,6 +1800,11 @@ func TestGenerateExternalRefWithTitleAndMultipleUsesNoDuplicate(t *testing.T) {
 
 	require.Contains(t, allSource, "type BucketType int")
 	require.NotContains(t, allSource, "BucketType_1")
+
+	// Both fields in the Main struct should use the BucketType type.
+	mainSource := string(sources["main.go"])
+	require.Contains(t, mainSource, "BucketA BucketType")
+	require.Contains(t, mainSource, "BucketB BucketType")
 }
 
 func writeSchemaFile(t *testing.T, path, contents string) {
