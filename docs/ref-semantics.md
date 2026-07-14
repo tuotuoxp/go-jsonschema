@@ -185,6 +185,18 @@ Examples of explicit modeling intent may include:
 
 Without such signals, `$ref` should be treated as transparent by default.
 
+When explicit naming metadata appears on a schema object that also contains `$ref`,
+that metadata is part of the effective post-expansion schema. In chained refs,
+the final generated symbol name should therefore be resolved from the effective
+merged view with the following priority:
+
+1. effective `x-go-type`
+2. effective `title`
+3. fallback referenced-schema naming
+
+Use-site naming overrides should win even when the terminal referenced file has a
+different filename-derived fallback name.
+
 ---
 
 ## Phase-1 local validation overrides for `$ref` siblings
@@ -323,6 +335,10 @@ optimization), but it is not required to treat the defs key as a stable user-vis
 
 Here the schema author has signaled a distinct modeling concept. The generator should preserve a stable
 shared symbol across all references to this schema.
+
+If that explicit naming intent is expressed on a wrapper schema that itself `$ref`s
+another schema, the wrapper's effective naming metadata still defines the final
+user-visible symbol after transparent expansion.
 
 **In practice**, the distinction matters most when the same unnamed object fragment is referenced from
 multiple fields. For example:

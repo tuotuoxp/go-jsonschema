@@ -164,6 +164,234 @@ func TestResolveReferencedDefinitionTypeNameUsesFallbackByDefault(t *testing.T) 
 	require.Equal(t, "User", got)
 }
 
+func TestGenerateChainedRefUsesEffectiveOverrideName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single level root ref uses x-go-type", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		idSchemaPath := filepath.Join(dir, "id.schema.json")
+		wrapperSchemaPath := filepath.Join(dir, "media-id-wrapper.schema.json")
+
+		writeSchemaFile(t, idSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/id",
+  "type": "integer",
+  "format": "int64",
+  "minimum": 1
+}`)
+		writeSchemaFile(t, wrapperSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id-wrapper",
+  "title": "MediaID",
+  "x-go-type": "MediaID",
+  "$ref": "id.schema.json"
+}`)
+
+		cfg := testConfigWithMappings(
+			SchemaMapping{
+				SchemaID:    "https://example.com/media-id-wrapper",
+				OutputName:  "wrapper.go",
+				PackageName: "testpkg",
+			},
+		)
+
+		gen, err := New(cfg)
+		require.NoError(t, err)
+		require.NoError(t, gen.DoFile(wrapperSchemaPath))
+
+		sources, err := gen.Sources()
+		require.NoError(t, err)
+
+		generated := string(sources["wrapper.go"])
+		require.Contains(t, generated, "type MediaID int64")
+		require.Contains(t, generated, `return fmt.Errorf("field %s: must be >= %v", "", 1)`)
+		require.NotContains(t, generated, "type IdSchemaJson int64")
+	})
+
+	t.Run("multi level root ref uses effective override name", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		idSchemaPath := filepath.Join(dir, "id.schema.json")
+		mediaIDSchemaPath := filepath.Join(dir, "media-id.schema.json")
+		wrapperSchemaPath := filepath.Join(dir, "media-id-wrapper.schema.json")
+
+		writeSchemaFile(t, idSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/id",
+  "type": "integer",
+  "format": "int64",
+  "minimum": 1
+}`)
+		writeSchemaFile(t, mediaIDSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id",
+  "description": "storage.media_id",
+  "custom-tag": "storage_media_id",
+  "$ref": "id.schema.json"
+}`)
+		writeSchemaFile(t, wrapperSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id-wrapper",
+  "title": "MediaID",
+  "x-go-type": "MediaID",
+  "$ref": "media-id.schema.json"
+}`)
+
+		cfg := testConfigWithMappings(
+			SchemaMapping{
+				SchemaID:    "https://example.com/media-id-wrapper",
+				OutputName:  "wrapper.go",
+				PackageName: "testpkg",
+			},
+		)
+
+		gen, err := New(cfg)
+		require.NoError(t, err)
+		require.NoError(t, gen.DoFile(wrapperSchemaPath))
+
+		sources, err := gen.Sources()
+		require.NoError(t, err)
+
+		generated := string(sources["wrapper.go"])
+		require.Contains(t, generated, "type MediaID int64")
+		require.Contains(t, generated, `return fmt.Errorf("field %s: must be >= %v", "", 1)`)
+		require.NotContains(t, generated, "type IdSchemaJson int64")
+	})
+}
+
+func TestGenerateObjectPropertyUsesEffectiveRefOverrideName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	idSchemaPath := filepath.Join(dir, "id.schema.json")
+	mediaIDSchemaPath := filepath.Join(dir, "media-id.schema.json")
+	wrapperSchemaPath := filepath.Join(dir, "media-id-wrapper.schema.json")
+	objectSchemaPath := filepath.Join(dir, "example-object.schema.json")
+
+	writeSchemaFile(t, idSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/id",
+  "type": "integer",
+  "format": "int64",
+  "minimum": 1
+}`)
+	writeSchemaFile(t, mediaIDSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id",
+  "description": "storage.media_id",
+  "custom-tag": "storage_media_id",
+  "$ref": "id.schema.json"
+}`)
+	writeSchemaFile(t, wrapperSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id-wrapper",
+  "title": "MediaID",
+  "x-go-type": "MediaID",
+  "$ref": "media-id.schema.json"
+}`)
+	writeSchemaFile(t, objectSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/example-object",
+  "title": "ExampleObject",
+  "type": "object",
+  "properties": {
+    "media_id": {
+      "$ref": "media-id-wrapper.schema.json"
+    }
+  },
+  "required": ["media_id"]
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/example-object",
+			OutputName:  "example.go",
+			PackageName: "testpkg",
+		},
+	)
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(objectSchemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	generated := string(sources["example.go"])
+	refSource := string(sources["default.go"])
+	require.Contains(t, refSource, "type MediaID int64")
+	require.Contains(t, generated, "MediaId MediaID `json:\"media_id\" yaml:\"media_id\" mapstructure:\"media_id\"`")
+	require.Contains(t, refSource, "if 1 > plain {")
+	require.NotContains(t, generated, "IdSchema")
+	require.NotContains(t, refSource, "type IdSchema int64")
+}
+
+func TestGenerateChainedRefWithoutOverridesKeepsFallbackName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	idSchemaPath := filepath.Join(dir, "id.schema.json")
+	mediaIDSchemaPath := filepath.Join(dir, "media-id.schema.json")
+	wrapperSchemaPath := filepath.Join(dir, "media-id-wrapper.schema.json")
+	objectSchemaPath := filepath.Join(dir, "example-object.schema.json")
+
+	writeSchemaFile(t, idSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/id",
+  "type": "integer",
+  "format": "int64",
+  "minimum": 1
+}`)
+	writeSchemaFile(t, mediaIDSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id",
+  "description": "storage.media_id",
+  "custom-tag": "storage_media_id",
+  "$ref": "id.schema.json"
+}`)
+	writeSchemaFile(t, wrapperSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/media-id-wrapper",
+  "$ref": "media-id.schema.json"
+}`)
+	writeSchemaFile(t, objectSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/example-object",
+  "title": "ExampleObject",
+  "type": "object",
+  "properties": {
+    "media_id": {
+      "$ref": "media-id-wrapper.schema.json"
+    }
+  },
+  "required": ["media_id"]
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/example-object",
+			OutputName:  "example.go",
+			PackageName: "testpkg",
+		},
+	)
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(objectSchemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	generated := string(sources["example.go"])
+	refSource := string(sources["default.go"])
+	require.Contains(t, refSource, "type IdSchema int64")
+	require.Contains(t, generated, "MediaId IdSchema `json:\"media_id\" yaml:\"media_id\" mapstructure:\"media_id\"`")
+	require.NotContains(t, refSource, "type MediaID int64")
+}
+
 func TestGenerateOneOfEnvelopeOptionalFieldUsesPointerAssignment(t *testing.T) {
 	t.Parallel()
 
