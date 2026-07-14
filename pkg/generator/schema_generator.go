@@ -1447,26 +1447,6 @@ func cloneBoolPtr(value *bool) *bool {
 	return &cloned
 }
 
-func cloneFloat64Ptr(value *float64) *float64 {
-	if value == nil {
-		return nil
-	}
-
-	cloned := *value
-
-	return &cloned
-}
-
-func cloneAnyPtr(value *any) *any {
-	if value == nil {
-		return nil
-	}
-
-	cloned := *value
-
-	return &cloned
-}
-
 func (g *schemaGenerator) hasLocalRefValidationOverride(prop, resolvedRefSchema *schemas.Type) bool {
 	if prop == nil || resolvedRefSchema == nil {
 		return false
