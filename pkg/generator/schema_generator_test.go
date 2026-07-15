@@ -1718,6 +1718,95 @@ func TestGenerateXGoRefChainedDefsRefDoesNotWarnAndUsesStableImportedType(t *tes
 	require.NotContains(t, generated, "type OrderID int64")
 }
 
+func TestGenerateExternalRefWithTitleAndMultipleUsesNoDuplicate(t *testing.T) {
+	t.Parallel()
+
+	// Regression: when an external $defs entry has both a "$ref" and a "title"
+	// (making it a named-type wrapper), and two or more properties in the
+	// consuming schema reference the same definition, the generator used to emit
+	//
+	//   Warning: Multiple types map to the name "BucketType";
+	//            declaring duplicate as "BucketType_1" instead
+	//
+	// because generateRootType (called from AddFile) registered the resolved
+	// schema as "BucketType", then generateReferencedType called
+	// generateDeclaredType again for the same definition.  The second call
+	// created a fresh merged schema whose Dereferenced flag differed from the
+	// already-registered one (which resolveRef had set to true), causing the
+	// cmp.Equal dedup check to fail.
+	dir := t.TempDir()
+	typesSchemaPath := filepath.Join(dir, "types.schema.json")
+	mainSchemaPath := filepath.Join(dir, "main.schema.json")
+
+	writeSchemaFile(t, typesSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/types",
+  "$defs": {
+    "BucketBase": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "BucketType": {
+      "title": "BucketType",
+      "$ref": "#/$defs/BucketBase"
+    }
+  }
+}`)
+
+	writeSchemaFile(t, mainSchemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/main",
+  "title": "Main",
+  "type": "object",
+  "properties": {
+    "bucket_a": {
+      "$ref": "./types.schema.json#/$defs/BucketType"
+    },
+    "bucket_b": {
+      "$ref": "./types.schema.json#/$defs/BucketType"
+    }
+  },
+  "required": ["bucket_a", "bucket_b"]
+}`)
+
+	var warnings []string
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/main",
+			OutputName:  "main.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.Warner = func(msg string) {
+		warnings = append(warnings, msg)
+	}
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(mainSchemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	// No duplicate-name warning should have been emitted.
+	require.Empty(t, warnings, "unexpected warnings: %v", warnings)
+
+	// BucketType should be declared exactly once; no BucketType_1 alias.
+	allSource := ""
+	for _, src := range sources {
+		allSource += string(src)
+	}
+
+	require.Contains(t, allSource, "type BucketType int")
+	require.NotContains(t, allSource, "BucketType_1")
+
+	// Both fields in the Main struct should use the BucketType type.
+	mainSource := string(sources["main.go"])
+	require.Contains(t, mainSource, "BucketA BucketType")
+	require.Contains(t, mainSource, "BucketB BucketType")
+}
+
 func writeSchemaFile(t *testing.T, path, contents string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
@@ -1734,4 +1823,172 @@ func testConfigWithMappings(mappings ...SchemaMapping) Config {
 		Tags:               []string{"json", "yaml", "mapstructure"},
 		Warner:             func(string) {},
 	}
+}
+
+// TestRefNamingOwnershipRules validates the four branches of the $ref naming
+// ownership rule (Rule 1–4 from the problem statement).
+func TestRefNamingOwnershipRules(t *testing.T) {
+	t.Parallel()
+
+	makeGen := func(t *testing.T, warner func(string)) *Generator {
+		t.Helper()
+
+		gen, err := New(Config{
+			SchemaMappings:     []SchemaMapping{},
+			ExtraImports:       false,
+			DefaultPackageName: "github.com/example/test",
+			DefaultOutputName:  "-",
+			ResolveExtensions:  []string{".json", ".schema"},
+			YAMLExtensions:     []string{".yaml", ".yml"},
+			Tags:               []string{"json"},
+			Warner:             warner,
+		})
+		require.NoError(t, err)
+
+		return gen
+	}
+
+	// Rule 1: unnamed wrapper, named target → error.
+	t.Run("rule1_unnamedWrapperNamedTarget_title", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		schemaPath := filepath.Join(dir, "schema.json")
+		writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/r1",
+  "type": "object",
+  "$defs": {
+    "NamedTarget":   { "title": "NamedTarget", "type": "string" },
+    "UnnamedWrapper": { "$ref": "#/$defs/NamedTarget" }
+  }
+}`)
+
+		gen := makeGen(t, func(string) {})
+		err := gen.DoFile(schemaPath)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errRefNamingOwnership)
+		require.Contains(t, err.Error(), `wrapper "UnnamedWrapper" is unnamed`)
+		require.Contains(t, err.Error(), `title/x-go-type/x-go-ref/goJSONSchema.type`)
+	})
+
+	// Rule 1 variant: unnamed wrapper, x-go-type target → error.
+	t.Run("rule1_unnamedWrapperNamedTarget_xGoType", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		schemaPath := filepath.Join(dir, "schema.json")
+		writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/r1b",
+  "type": "object",
+  "$defs": {
+    "XGoTypeTarget":  { "x-go-type": "CustomString", "type": "string" },
+    "UnnamedWrapper": { "$ref": "#/$defs/XGoTypeTarget" }
+  }
+}`)
+
+		gen := makeGen(t, func(string) {})
+		err := gen.DoFile(schemaPath)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errRefNamingOwnership)
+	})
+
+	// Rule 1 at root-schema level: a root schema that is an unnamed $ref wrapper
+	// pointing to a named external schema → error.
+	t.Run("rule1_rootSchemaUnnamedWrapperNamedTarget", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		targetPath := filepath.Join(dir, "target.schema")
+		wrapperPath := filepath.Join(dir, "wrapper.json")
+
+		writeSchemaFile(t, targetPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/target",
+  "title": "NamedTarget",
+  "type": "object"
+}`)
+		writeSchemaFile(t, wrapperPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/wrapper",
+  "$ref": "./target.schema"
+}`)
+
+		gen := makeGen(t, func(string) {})
+		err := gen.DoFile(wrapperPath)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errRefNamingOwnership)
+	})
+
+	// Rule 2: both wrapper and target are named → warning emitted, generation succeeds,
+	// wrapper name takes precedence.
+	t.Run("rule2_bothNamed_warnAndSucceed", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		schemaPath := filepath.Join(dir, "schema.json")
+		writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/r2",
+  "type": "object",
+  "$defs": {
+    "NamedTarget":   { "title": "NamedTarget",   "type": "string" },
+    "WrapperNamed":  { "title": "WrapperNamed",  "$ref": "#/$defs/NamedTarget" }
+  }
+}`)
+
+		var warnings []string
+		gen := makeGen(t, func(msg string) { warnings = append(warnings, msg) })
+		require.NoError(t, gen.DoFile(schemaPath))
+
+		// Exactly one warning should mention naming override.
+		require.Len(t, warnings, 1)
+		require.Contains(t, warnings[0], "WrapperNamed")
+		require.Contains(t, warnings[0], "overrides")
+	})
+
+	// Rule 3: only wrapper is named, target is not → normal generation, no warning.
+	t.Run("rule3_onlyWrapperNamed_noError", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		schemaPath := filepath.Join(dir, "schema.json")
+		writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/r3",
+  "type": "object",
+  "$defs": {
+    "UnnamedTarget":  { "type": "string" },
+    "WrapperNamed":   { "title": "WrapperNamed", "$ref": "#/$defs/UnnamedTarget" }
+  }
+}`)
+
+		var warnings []string
+		gen := makeGen(t, func(msg string) { warnings = append(warnings, msg) })
+		require.NoError(t, gen.DoFile(schemaPath))
+		require.Empty(t, warnings)
+	})
+
+	// Rule 4: neither wrapper nor target is named → existing behaviour preserved, no error.
+	t.Run("rule4_neitherNamed_noError", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		schemaPath := filepath.Join(dir, "schema.json")
+		writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/r4",
+  "type": "object",
+  "$defs": {
+    "UnnamedTarget":  { "type": "string" },
+    "UnnamedWrapper": { "$ref": "#/$defs/UnnamedTarget" }
+  }
+}`)
+
+		var warnings []string
+		gen := makeGen(t, func(msg string) { warnings = append(warnings, msg) })
+		require.NoError(t, gen.DoFile(schemaPath))
+		require.Empty(t, warnings)
+	})
 }

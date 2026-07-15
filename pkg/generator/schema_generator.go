@@ -27,7 +27,8 @@ var (
 	//nolint: gochecknoglobals // global to avoid duplication
 	arrayTypeVal = codegen.ArrayType{Type: emptyInterfaceTypeVal}
 
-	errEmptyInAnyOf = errors.New("cannot have empty anyOf array")
+	errEmptyInAnyOf       = errors.New("cannot have empty anyOf array")
+	errRefNamingOwnership = errors.New("invalid $ref naming ownership")
 
 	//nolint:gochecknoglobals // compiled once for schema extension validation
 	goIdentifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -79,6 +80,14 @@ func (g *schemaGenerator) generateRootType() error {
 			}
 		}
 
+		// Enforce $ref naming ownership: if a definition is a $ref wrapper, it must
+		// explicitly name itself when the target carries name-defining metadata.
+		if def != nil && def.Ref != "" {
+			if err := g.validateRefNamingOwnership(def, g.caser.Identifierize(name)); err != nil {
+				return err
+			}
+		}
+
 		_, err := g.generateDeclaredType(def, newNameScope(g.caser.Identifierize(name)))
 		if err != nil {
 			return err
@@ -103,6 +112,14 @@ func (g *schemaGenerator) generateRootType() error {
 	rootTypeName := g.getRootTypeName(g.schema, g.schemaFileName)
 	if _, ok := g.output.declsByName[rootTypeName]; ok {
 		return nil
+	}
+
+	// Enforce $ref naming ownership: if the root schema is itself a $ref wrapper,
+	// it must explicitly name itself when the target carries name-defining metadata.
+	if g.schema.Ref != "" {
+		if err := g.validateRefNamingOwnership((*schemas.Type)(g.schema.ObjectAsType), rootTypeName); err != nil {
+			return err
+		}
 	}
 
 	_, err := g.generateDeclaredType((*schemas.Type)(g.schema.ObjectAsType), newNameScope(rootTypeName))
@@ -210,6 +227,35 @@ func (g *schemaGenerator) generateReferencedType(t *schemas.Type) (codegen.Type,
 		defName, err = g.resolveReferencedDefinitionTypeName(def, g.caser.Identifierize(defName))
 		if err != nil {
 			return nil, err
+		}
+
+		// If the definition was already generated (e.g., by AddFile → generateRootType
+		// when the external schema was first encountered), return the existing declaration
+		// directly.  This prevents generateDeclaredType from being called again for the
+		// same logical definition, which would create a new merged-schema pointer that
+		// fails the cmp.Equal dedup check (because resolveRef may have mutated
+		// Dereferenced=true on the first registered pointer in the meantime) and
+		// incorrectly emit a "Multiple types map to the name" warning.
+		if decl, ok := sg.output.declsByName[defName]; ok && decl != nil {
+			if sg.output.file.Package.QualifiedName == g.output.file.Package.QualifiedName {
+				return &codegen.NamedType{Decl: decl}, nil
+			}
+
+			// Cross-package: ensure the import is registered then return.
+			found := false
+			for _, i := range g.output.file.Package.Imports {
+				if i.Name == sg.output.file.Package.Name() && i.QualifiedName == sg.output.file.Package.QualifiedName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				g.output.file.Package.AddImport(sg.output.file.Package.QualifiedName, sg.output.file.Package.Name())
+			}
+			return &codegen.NamedType{
+				Package: &sg.output.file.Package,
+				Decl:    decl,
+			}, nil
 		}
 	} else {
 		rootType := (*schemas.Type)(schema.ObjectAsType)
@@ -2598,4 +2644,113 @@ func (g *schemaGenerator) isTypeNullable(t *schemas.Type) (int, bool) {
 	}
 
 	return -1, false
+}
+
+// schemaHasNameMetadata reports whether t carries name-defining metadata:
+// title, x-go-type (non-empty), x-go-ref, or goJSONSchema.type.
+// These fields establish identity ownership for $ref naming validation.
+func schemaHasNameMetadata(t *schemas.Type) bool {
+	if t == nil {
+		return false
+	}
+
+	if t.Title != "" {
+		return true
+	}
+
+	if t.XGoType != nil && strings.TrimSpace(*t.XGoType) != "" {
+		return true
+	}
+
+	if t.XGoRef != nil {
+		return true
+	}
+
+	if ext := t.GoJSONSchemaExtension; ext != nil && ext.Type != nil && strings.TrimSpace(*ext.Type) != "" {
+		return true
+	}
+
+	return false
+}
+
+// resolveDirectRefTarget loads the schema directly pointed to by wrapper.Ref
+// (one level only, without following chained refs) and returns it.
+// Returns nil if the target cannot be determined; callers treat nil as "skip validation".
+func (g *schemaGenerator) resolveDirectRefTarget(wrapper *schemas.Type) (*schemas.Type, error) {
+	if wrapper == nil || wrapper.Ref == "" {
+		return nil, nil
+	}
+
+	defName, fileName, err := g.extractRefNames(wrapper)
+	if err != nil {
+		return nil, nil //nolint:nilerr // best-effort; parse failure suppresses check
+	}
+
+	schema := g.schema
+	if fileName != "" {
+		schema, err = g.loader.Load(fileName, g.schemaFileName)
+		if err != nil {
+			return nil, nil //nolint:nilerr // best-effort; load failure suppresses check
+		}
+	}
+
+	if defName != "" {
+		def, ok := schema.Definitions[defName]
+		if !ok {
+			return nil, nil // definition not found – suppress check
+		}
+
+		return def, nil
+	}
+
+	if schema.ObjectAsType == nil {
+		return nil, nil
+	}
+
+	return (*schemas.Type)(schema.ObjectAsType), nil
+}
+
+// validateRefNamingOwnership enforces naming ownership rules for a schema that
+// contains a $ref:
+//
+//   - (Rule 1) unnamed wrapper + named target → generation error.
+//   - (Rule 2) both named → warning, wrapper takes precedence (existing behaviour).
+//   - (Rule 3) only wrapper named → normal (use wrapper name).
+//   - (Rule 4) neither named → keep existing behaviour.
+//
+// wrapperDesc is a human-readable description of the wrapper schema used in
+// error/warning messages (typically the definition name or root type name).
+func (g *schemaGenerator) validateRefNamingOwnership(wrapper *schemas.Type, wrapperDesc string) error {
+	if wrapper == nil || wrapper.Ref == "" {
+		return nil
+	}
+
+	target, err := g.resolveDirectRefTarget(wrapper)
+	if err != nil || target == nil {
+		// Cannot resolve target – skip validation to avoid false positives.
+		return nil
+	}
+
+	targetNamed := schemaHasNameMetadata(target)
+	wrapperNamed := schemaHasNameMetadata(wrapper)
+
+	switch {
+	case targetNamed && !wrapperNamed:
+		// Rule 1: unnamed wrapper referencing a named target – hard error.
+		return fmt.Errorf(
+			"%w: wrapper %q is unnamed, but referenced schema %q defines name metadata "+
+				"(title/x-go-type/x-go-ref/goJSONSchema.type); add explicit naming on wrapper or remove naming from target",
+			errRefNamingOwnership, wrapperDesc, wrapper.Ref,
+		)
+
+	case targetNamed && wrapperNamed:
+		// Rule 2: both named – warn that wrapper overrides target, then continue.
+		g.warner(fmt.Sprintf(
+			"invalid $ref naming: wrapper %q defines name metadata that overrides "+
+				"referenced schema %q; wrapper naming takes precedence",
+			wrapperDesc, wrapper.Ref,
+		))
+	}
+
+	return nil
 }
