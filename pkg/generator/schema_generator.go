@@ -2666,7 +2666,7 @@ func schemaHasNameMetadata(t *schemas.Type) bool {
 		return true
 	}
 
-	if ext := t.GoJSONSchemaExtension; ext != nil && ext.Type != nil {
+	if ext := t.GoJSONSchemaExtension; ext != nil && ext.Type != nil && strings.TrimSpace(*ext.Type) != "" {
 		return true
 	}
 
