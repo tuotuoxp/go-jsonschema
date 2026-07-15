@@ -266,6 +266,35 @@ func (g *schemaGenerator) generateReferencedType(t *schemas.Type) (codegen.Type,
 		def = rootType
 		defName = g.getRootTypeName(schema, fileName)
 
+		// If the root type was already generated (e.g., by AddFile →
+		// generateRootType when the external schema was first encountered),
+		// return the existing declaration directly.  This prevents
+		// generateDeclaredType from being called again for the same logical
+		// type, which would create a new schema pointer whose Dereferenced
+		// flag differs from the already-registered one and cause a spurious
+		// "Multiple types map to the name" warning.
+		if decl, ok := sg.output.declsByName[defName]; ok && decl != nil {
+			if sg.output.file.Package.QualifiedName == g.output.file.Package.QualifiedName {
+				return &codegen.NamedType{Decl: decl}, nil
+			}
+
+			// Cross-package: ensure the import is registered then return.
+			found := false
+			for _, i := range g.output.file.Package.Imports {
+				if i.Name == sg.output.file.Package.Name() && i.QualifiedName == sg.output.file.Package.QualifiedName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				g.output.file.Package.AddImport(sg.output.file.Package.QualifiedName, sg.output.file.Package.Name())
+			}
+			return &codegen.NamedType{
+				Package: &sg.output.file.Package,
+				Decl:    decl,
+			}, nil
+		}
+
 		if len(def.Type) == 0 && def.Ref == "" {
 			// Minor hack to make definitions default to being objects.
 			rootTypeCopy := *def
