@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "$defs": {
+    "InlineCount": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "properties": {
+    "name": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/InlineCount"
+  }
+}

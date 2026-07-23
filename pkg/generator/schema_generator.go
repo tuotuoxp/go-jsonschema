@@ -971,7 +971,8 @@ func (g *schemaGenerator) generateStructType(t *schemas.Type, scope nameScope) (
 		var err error
 
 		if t.AdditionalProperties != nil {
-			if valueType, err = g.generateType(t.AdditionalProperties, scope.add("Value")); err != nil {
+			additionalPropertiesValueSchema := g.resolveAdditionalPropertiesValueSchema(t.AdditionalProperties)
+			if valueType, err = g.generateType(additionalPropertiesValueSchema, scope.add("Value")); err != nil {
 				return nil, err
 			}
 		}
@@ -1007,50 +1008,62 @@ func (g *schemaGenerator) generateStructType(t *schemas.Type, scope nameScope) (
 
 	// Checking .Not here because `false` is unmarshalled to .Not = Type{}.
 	if t.AdditionalProperties != nil && t.AdditionalProperties.Not == nil {
+		additionalPropertiesValueSchema := g.resolveAdditionalPropertiesValueSchema(t.AdditionalProperties)
+
 		var (
 			defaultValue any          = nil
 			fieldType    codegen.Type = emptyInterfaceTypeVal
 		)
 
-		if len(t.AdditionalProperties.Type) == 1 {
-			switch t.AdditionalProperties.Type[0] {
+		if t.AdditionalProperties.Ref != "" {
+			valueType, err := g.generateType(additionalPropertiesValueSchema, scope.add("AdditionalPropertiesValue"))
+			if err != nil {
+				return nil, err
+			}
+
+			fieldType = codegen.MapType{
+				KeyType:   stringTypeVal,
+				ValueType: valueType,
+			}
+
+			if inferredDefault, ok := g.inferAdditionalPropertiesMapDefaultValue(additionalPropertiesValueSchema, false, false); ok {
+				defaultValue = inferredDefault
+			}
+		} else if inferredDefault, ok := g.inferAdditionalPropertiesMapDefaultValue(additionalPropertiesValueSchema, false, true); ok {
+			defaultValue = inferredDefault
+
+			switch additionalPropertiesValueSchema.Type[0] {
 			case schemas.TypeNameString:
-				defaultValue = map[string]string{}
 				fieldType = codegen.MapType{
 					KeyType:   stringTypeVal,
 					ValueType: stringTypeVal,
 				}
 
 			case schemas.TypeNameArray:
-				defaultValue = map[string][]any{}
 				fieldType = codegen.MapType{
 					KeyType:   stringTypeVal,
 					ValueType: arrayTypeVal,
 				}
 
 			case schemas.TypeNameNumber:
-				defaultValue = map[string]float64{}
 				fieldType = codegen.MapType{
 					KeyType:   stringTypeVal,
 					ValueType: codegen.PrimitiveType{Type: float64Type},
 				}
 
 			case schemas.TypeNameInteger:
-				defaultValue = map[string]int{}
 				fieldType = codegen.MapType{
 					KeyType:   stringTypeVal,
 					ValueType: intTypeVal,
 				}
 
 			case schemas.TypeNameBoolean:
-				defaultValue = map[string]bool{}
 				fieldType = codegen.MapType{
 					KeyType:   stringTypeVal,
 					ValueType: boolTypeVal,
 				}
 
 			default:
-				defaultValue = map[string]any{}
 				fieldType = codegen.MapType{
 					KeyType:   stringTypeVal,
 					ValueType: emptyInterfaceTypeVal,
@@ -1276,6 +1289,18 @@ func (g *schemaGenerator) resolveStructFieldSchemaType(prop *schemas.Type) (*sch
 	}
 
 	return g.applyLocalRefValidationOverride(resolvedRefSchema, prop), true
+}
+
+func (g *schemaGenerator) resolveAdditionalPropertiesValueSchema(additionalProperties *schemas.Type) *schemas.Type {
+	if additionalProperties == nil {
+		return nil
+	}
+
+	if resolvedRefSchema, shouldSemanticInlineRef := g.resolveStructFieldSchemaType(additionalProperties); shouldSemanticInlineRef {
+		return resolvedRefSchema
+	}
+
+	return additionalProperties
 }
 
 func (g *schemaGenerator) cacheResolvedRefSchema(prop *schemas.Type) {
@@ -1825,6 +1850,10 @@ func (g *schemaGenerator) shouldKeepReferencedSchemaAsNamedType(schemaType *sche
 		return true
 	}
 
+	if schemaType.XGoRef != nil {
+		return true
+	}
+
 	if ext := schemaType.GoJSONSchemaExtension; ext != nil && ext.Type != nil {
 		return true
 	}
@@ -2177,38 +2206,55 @@ func (g *schemaGenerator) generateAllOfType(t *schemas.Type, scope nameScope) (c
 
 func (g *schemaGenerator) defaultPropertyValue(prop *schemas.Type) any {
 	if prop.AdditionalProperties != nil {
-		if len(prop.AdditionalProperties.Type) == 0 {
-			return prop.Default
-		}
-
-		if len(prop.AdditionalProperties.Type) != 1 {
-			g.warner("Additional property has multiple types; will be represented as an empty interface with no validation")
-
-			return prop.Default
-		}
-
-		switch prop.AdditionalProperties.Type[0] {
-		case schemas.TypeNameString:
-			return map[string]string{}
-
-		case schemas.TypeNameArray:
-			return map[string][]any{}
-
-		case schemas.TypeNameNumber:
-			return map[string]float64{}
-
-		case schemas.TypeNameInteger:
-			return map[string]int{}
-
-		case schemas.TypeNameBoolean:
-			return map[string]bool{}
-
-		default:
-			return prop.Default
+		effectiveAdditionalProperties := g.resolveAdditionalPropertiesValueSchema(prop.AdditionalProperties)
+		if defaultValue, ok := g.inferAdditionalPropertiesMapDefaultValue(effectiveAdditionalProperties, true, false); ok {
+			return defaultValue
 		}
 	}
 
 	return prop.Default
+}
+
+func (g *schemaGenerator) inferAdditionalPropertiesMapDefaultValue(
+	additionalProperties *schemas.Type,
+	warnOnMultipleTypes bool,
+	includeFallbackAny bool,
+) (any, bool) {
+	if additionalProperties == nil || len(additionalProperties.Type) == 0 {
+		return nil, false
+	}
+
+	if len(additionalProperties.Type) != 1 {
+		if warnOnMultipleTypes {
+			g.warner("Additional property has multiple types; will be represented as an empty interface with no validation")
+		}
+
+		return nil, false
+	}
+
+	switch additionalProperties.Type[0] {
+	case schemas.TypeNameString:
+		return map[string]string{}, true
+
+	case schemas.TypeNameArray:
+		return map[string][]any{}, true
+
+	case schemas.TypeNameNumber:
+		return map[string]float64{}, true
+
+	case schemas.TypeNameInteger:
+		return map[string]int{}, true
+
+	case schemas.TypeNameBoolean:
+		return map[string]bool{}, true
+
+	default:
+		if includeFallbackAny {
+			return map[string]any{}, true
+		}
+
+		return nil, false
+	}
 }
 
 //nolint:gocyclo // todo: reduce cyclomatic complexity
