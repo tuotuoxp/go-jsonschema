@@ -105,8 +105,12 @@ func (g *schemaGenerator) generateRootType() error {
 		return nil
 	}
 
-	// Schema with an empty type list: nothing to generate for the root type.
-	if len(g.schema.Type) == 0 && g.schema.Ref == "" {
+	rootType := (*schemas.Type)(g.schema.ObjectAsType)
+	rootHasXGoAlias := rootType != nil && rootType.XGoAlias != nil
+
+	// Schema with an empty type list: nothing to generate for the root type,
+	// unless a terminal codegen directive such as x-go-alias is present.
+	if len(g.schema.Type) == 0 && g.schema.Ref == "" && !rootHasXGoAlias {
 		return nil
 	}
 
@@ -123,7 +127,7 @@ func (g *schemaGenerator) generateRootType() error {
 		}
 	}
 
-	_, err := g.generateDeclaredType((*schemas.Type)(g.schema.ObjectAsType), newNameScope(rootTypeName))
+	_, err := g.generateDeclaredType(rootType, newNameScope(rootTypeName))
 
 	return err
 }
@@ -404,6 +408,18 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 		}
 	}
 
+	if titleName := g.resolveTitleSchemaTypeName(schemaType); titleName != "" {
+		return titleName
+	}
+
+	return fallback
+}
+
+func (g *Generator) resolveTitleSchemaTypeName(schemaType *schemas.Type) string {
+	if schemaType == nil {
+		return ""
+	}
+
 	if schemaType.Ref != "" && schemaType.Title != "" {
 		return g.caser.Identifierize(schemaType.Title)
 	}
@@ -412,7 +428,7 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 		return g.caser.Identifierize(schemaType.Title)
 	}
 
-	return fallback
+	return ""
 }
 
 func explicitXGoTypeName(xGoType string) string {
@@ -1897,10 +1913,10 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 		qualifiedTarget = importAlias + "." + targetType
 	}
 
-	// Determine the declaration name (same logic as normal type declarations).
+	// Determine the declaration name. For x-go-alias schemas, prefer a title-derived name (when applicable) and otherwise fall back to the scoped unique name; x-go-type is intentionally ignored.
 	name := g.output.uniqueTypeName(scope)
-	if resolvedName := g.resolveSchemaTypeName(t, ""); resolvedName != "" {
-		name = resolvedName
+	if titleName := g.resolveTitleSchemaTypeName(t); titleName != "" {
+		name = titleName
 	}
 
 	// Register a TypeDecl for cache lookup and NamedType references.

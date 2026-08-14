@@ -2214,3 +2214,167 @@ func TestGenerateXGoAliasEmptyType(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "x-go-alias.type must not be empty")
 }
+
+func TestGenerateRootXGoAliasLocalType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "get-image-meta-response.schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/root-alias-local",
+  "title": "GetImageMetaResponse",
+  "x-go-alias": {
+    "type": "ImageInfo"
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/root-alias-local",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, "type GetImageMetaResponse = ImageInfo")
+}
+
+func TestGenerateRootXGoAliasWithXGoTypeStillEmitsAlias(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "get-image-meta-response.schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/root-alias-with-x-go-type",
+  "title": "GetImageMetaResponse",
+  "x-go-type": "IgnoredName",
+  "x-go-alias": {
+    "path": "valuzon/backend/sdks/bridge/openapi",
+    "alias": "bridgesdkopenapi",
+    "type": "ImageInfo"
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/root-alias-with-x-go-type",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, `bridgesdkopenapi "valuzon/backend/sdks/bridge/openapi"`)
+	require.Contains(t, generated, "type GetImageMetaResponse = bridgesdkopenapi.ImageInfo")
+	require.NotContains(t, generated, "type IgnoredName =")
+}
+
+func TestGenerateRootXGoAliasExternalTypeExplicitAlias(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/root-alias-external",
+  "title": "GetImageMetaResponse",
+  "x-go-alias": {
+    "path": "valuzon/backend/sdks/bridge/openapi",
+    "alias": "bridgesdkopenapi",
+    "type": "ImageInfo"
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/root-alias-external",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, `bridgesdkopenapi "valuzon/backend/sdks/bridge/openapi"`)
+	require.Contains(t, generated, "type GetImageMetaResponse = bridgesdkopenapi.ImageInfo")
+}
+
+func TestGenerateRootXGoAliasOverridesObjectMaterialization(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/root-alias-overrides-object",
+  "title": "AliasedObject",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" }
+  },
+  "x-go-alias": {
+    "path": "path/to/mypack",
+    "alias": "mypack",
+    "type": "CommonStruct"
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/root-alias-overrides-object",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, `mypack "path/to/mypack"`)
+	require.Contains(t, generated, "type AliasedObject = mypack.CommonStruct")
+	require.NotContains(t, generated, "type AliasedObject struct")
+}
