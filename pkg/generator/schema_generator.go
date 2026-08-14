@@ -106,10 +106,11 @@ func (g *schemaGenerator) generateRootType() error {
 	}
 
 	rootType := (*schemas.Type)(g.schema.ObjectAsType)
+	rootHasXGoAlias := rootType != nil && rootType.XGoAlias != nil
 
 	// Schema with an empty type list: nothing to generate for the root type,
 	// unless a terminal codegen directive such as x-go-alias is present.
-	if len(g.schema.Type) == 0 && g.schema.Ref == "" && rootType.XGoAlias == nil {
+	if len(g.schema.Type) == 0 && g.schema.Ref == "" && !rootHasXGoAlias {
 		return nil
 	}
 
