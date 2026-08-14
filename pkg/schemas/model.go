@@ -213,6 +213,9 @@ type Type struct {
 	// XGoRef configures import path/alias for referenced-definition Go type reuse.
 	XGoRef *XGoRefExtension `json:"x-go-ref,omitempty"` //nolint:tagliatelle // external schema extension name uses hyphens
 
+	// XGoAlias declares that this schema should be emitted as a Go type alias.
+	XGoAlias *XGoAliasExtension `json:"x-go-alias,omitempty"` //nolint:tagliatelle // external schema extension name uses hyphens
+
 	// GoOneOfEnvelope configures discriminator-based oneOf routing for this field.
 	GoOneOfEnvelope *GoOneOfEnvelopeExtension `json:"x-go-oneof-envelope,omitempty"` //nolint:tagliatelle // external schema extension name uses hyphens
 
@@ -456,6 +459,20 @@ type GoJSONSchemaExtension struct {
 type XGoRefExtension struct {
 	Path  string `json:"path"`
 	Alias string `json:"alias"`
+}
+
+// XGoAliasExtension declares that a schema should be emitted as a Go type alias.
+// The left-hand side of the alias is the schema's generated type name; the
+// right-hand side is resolved from this extension.
+type XGoAliasExtension struct {
+	// Path is the optional import path of the target package.
+	// When omitted, the alias refers to a type in the current package.
+	Path string `json:"path,omitempty"`
+	// Alias is an optional import alias for the target package.
+	// Ignored when Path is empty.
+	Alias string `json:"alias,omitempty"`
+	// Type is the required target Go type name (unqualified).
+	Type string `json:"type"`
 }
 
 // GoOneOfEnvelopeExtension configures discriminator-based oneOf routing for a field.

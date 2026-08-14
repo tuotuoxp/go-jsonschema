@@ -1869,7 +1869,7 @@ func TestRefNamingOwnershipRules(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorIs(t, err, errRefNamingOwnership)
 		require.Contains(t, err.Error(), `wrapper "UnnamedWrapper" is unnamed`)
-		require.Contains(t, err.Error(), `title/x-go-type/x-go-ref/goJSONSchema.type`)
+		require.Contains(t, err.Error(), `title/x-go-type/x-go-ref/x-go-alias/goJSONSchema.type`)
 	})
 
 	// Rule 1 variant: unnamed wrapper, x-go-type target → error.
@@ -1991,4 +1991,226 @@ func TestRefNamingOwnershipRules(t *testing.T) {
 		require.NoError(t, gen.DoFile(schemaPath))
 		require.Empty(t, warnings)
 	})
+}
+
+// TestGenerateXGoAliasLocalType verifies that a schema marked with
+// x-go-alias and no path emits a local Go type alias.
+func TestGenerateXGoAliasLocalType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/alias-local",
+  "type": "object",
+  "$defs": {
+    "HereStruct": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      }
+    },
+    "ThisStruct": {
+      "title": "ThisStruct",
+      "x-go-alias": {
+        "type": "HereStruct"
+      }
+    }
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/alias-local",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, "type ThisStruct = HereStruct")
+	require.NotContains(t, generated, "type ThisStruct struct")
+}
+
+// TestGenerateXGoAliasExternalType verifies that x-go-alias with a path emits
+// an import and a qualified alias declaration.
+func TestGenerateXGoAliasExternalType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/alias-external",
+  "type": "object",
+  "$defs": {
+    "ThisStruct": {
+      "title": "ThisStruct",
+      "x-go-alias": {
+        "path": "path/to/mypack",
+        "type": "CommonStruct"
+      }
+    }
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/alias-external",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, `"path/to/mypack"`)
+	require.Contains(t, generated, "type ThisStruct = mypack.CommonStruct")
+}
+
+// TestGenerateXGoAliasExternalTypeExplicitAlias verifies that x-go-alias with
+// an explicit import alias uses that alias in both the import statement and the
+// alias declaration.
+func TestGenerateXGoAliasExternalTypeExplicitAlias(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/alias-explicit-alias",
+  "type": "object",
+  "$defs": {
+    "ThisStruct": {
+      "title": "ThisStruct",
+      "x-go-alias": {
+        "path": "path/to/mypack",
+        "alias": "mypackalias",
+        "type": "CommonStruct"
+      }
+    }
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/alias-explicit-alias",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, gen.DoFile(schemaPath))
+
+	sources, err := gen.Sources()
+	require.NoError(t, err)
+
+	source, ok := sources["out.go"]
+	require.True(t, ok)
+
+	generated := string(source)
+	require.Contains(t, generated, `mypackalias "path/to/mypack"`)
+	require.Contains(t, generated, "type ThisStruct = mypackalias.CommonStruct")
+}
+
+// TestGenerateXGoAliasInvalidAlias verifies that a non-identifier alias value
+// is rejected with a clear error.
+func TestGenerateXGoAliasInvalidAlias(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/alias-bad-alias",
+  "type": "object",
+  "$defs": {
+    "ThisStruct": {
+      "title": "ThisStruct",
+      "x-go-alias": {
+        "path": "path/to/mypack",
+        "alias": "1invalid",
+        "type": "CommonStruct"
+      }
+    }
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/alias-bad-alias",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	err = gen.DoFile(schemaPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "x-go-alias.alias")
+	require.Contains(t, err.Error(), "must be a valid Go identifier")
+}
+
+// TestGenerateXGoAliasEmptyType verifies that an empty x-go-alias.type is
+// rejected with a clear error.
+func TestGenerateXGoAliasEmptyType(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeSchemaFile(t, schemaPath, `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "https://example.com/alias-empty-type",
+  "type": "object",
+  "$defs": {
+    "ThisStruct": {
+      "title": "ThisStruct",
+      "x-go-alias": {
+        "type": ""
+      }
+    }
+  }
+}`)
+
+	cfg := testConfigWithMappings(
+		SchemaMapping{
+			SchemaID:    "https://example.com/alias-empty-type",
+			OutputName:  "out.go",
+			PackageName: "testpkg",
+		},
+	)
+	cfg.StructNameFromTitle = true
+
+	gen, err := New(cfg)
+	require.NoError(t, err)
+	err = gen.DoFile(schemaPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "x-go-alias.type must not be empty")
 }

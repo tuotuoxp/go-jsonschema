@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -487,6 +488,10 @@ func (g *schemaGenerator) generateDeclaredType(t *schemas.Type, scope nameScope)
 		if odecl := g.output.getDeclByEqualSchema(scope.string(), t); odecl != nil {
 			return &codegen.NamedType{Decl: odecl}, nil
 		}
+	}
+
+	if t.XGoAlias != nil {
+		return g.generateXGoAliasDecl(t, scope)
 	}
 
 	if t.Enum != nil {
@@ -1393,6 +1398,7 @@ func cloneSchemaType(t *schemas.Type) *schemas.Type {
 	cloned.GoJSONSchemaExtension = cloneGoJSONSchemaExtension(t.GoJSONSchemaExtension)
 	cloned.XGoType = cloneStringPtr(t.XGoType)
 	cloned.XGoRef = cloneXGoRefExtension(t.XGoRef)
+	cloned.XGoAlias = cloneXGoAliasExtension(t.XGoAlias)
 	cloned.GoOneOfEnvelope = cloneGoOneOfEnvelopeExtension(t.GoOneOfEnvelope)
 
 	return &cloned
@@ -1470,6 +1476,16 @@ func cloneGoJSONSchemaExtension(ext *schemas.GoJSONSchemaExtension) *schemas.GoJ
 }
 
 func cloneXGoRefExtension(ext *schemas.XGoRefExtension) *schemas.XGoRefExtension {
+	if ext == nil {
+		return nil
+	}
+
+	cloned := *ext
+
+	return &cloned
+}
+
+func cloneXGoAliasExtension(ext *schemas.XGoAliasExtension) *schemas.XGoAliasExtension {
 	if ext == nil {
 		return nil
 	}
@@ -1818,6 +1834,92 @@ func validateGoIdentifier(value, partName, ref string) error {
 		value,
 		ref,
 	)
+}
+
+// generateXGoAliasDecl handles schemas marked with x-go-alias.
+// It emits:   type <DeclaredName> = <target>
+// where target is either a local type name or a qualified package.Type.
+func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope) (codegen.Type, error) {
+	ext := t.XGoAlias
+
+	// Validate: type must be non-empty.
+	targetType := strings.TrimSpace(ext.Type)
+	if targetType == "" {
+		return nil, fmt.Errorf("x-go-alias.type must not be empty for schema %q", scope.string())
+	}
+	if err := validateGoIdentifier(targetType, "x-go-alias.type", scope.string()); err != nil {
+		return nil, err
+	}
+
+	importPath := strings.TrimSpace(ext.Path)
+	var qualifiedTarget string
+
+	if importPath == "" || g.isSamePackageXGoRefImport(importPath) {
+		// Local alias: reference a type in the current package.
+		qualifiedTarget = targetType
+	} else {
+		// External alias: derive or use explicit import alias.
+		existingAlias := ""
+		hasImport := false
+		for _, imp := range g.output.file.Package.Imports {
+			if imp.QualifiedName == importPath {
+				hasImport = true
+				existingAlias = imp.Name
+				break
+			}
+		}
+
+		importAlias := strings.TrimSpace(ext.Alias)
+		if importAlias == "" {
+			if hasImport && existingAlias != "" {
+				importAlias = existingAlias
+			} else {
+				// Default: derive package name from the last path segment.
+				importAlias = path.Base(importPath)
+			}
+		}
+
+		if hasImport && existingAlias != importAlias {
+			return nil, fmt.Errorf(
+				"x-go-alias for schema %q imports %q as %q, but it is already imported as %q",
+				scope.string(),
+				importPath,
+				importAlias,
+				existingAlias,
+			)
+		}
+
+		if err := validateGoIdentifier(importAlias, "x-go-alias.alias", scope.string()); err != nil {
+			return nil, err
+		}
+
+		g.output.file.Package.AddImport(importPath, importAlias)
+		qualifiedTarget = importAlias + "." + targetType
+	}
+
+	// Determine the declaration name (same logic as normal type declarations).
+	name := g.output.uniqueTypeName(scope)
+	if resolvedName := g.resolveSchemaTypeName(t, ""); resolvedName != "" {
+		name = resolvedName
+	}
+
+	// Register a TypeDecl for cache lookup and NamedType references.
+	// The TypeDecl itself is NOT added to the file; AliasType handles emission.
+	decl := codegen.TypeDecl{
+		Name:       name,
+		Comment:    t.Description,
+		SchemaType: t,
+	}
+	g.output.declsBySchema[t] = &decl
+	g.output.declsByName[decl.Name] = &decl
+
+	// Emit the alias declaration to the file.
+	g.output.file.Package.AddDecl(&codegen.AliasType{
+		Alias: name,
+		Name:  qualifiedTarget,
+	})
+
+	return &codegen.NamedType{Decl: &decl}, nil
 }
 
 func (g *schemaGenerator) shouldKeepReferencedSchemaAsNamedType(schemaType *schemas.Type) bool {
@@ -2695,6 +2797,10 @@ func schemaHasNameMetadata(t *schemas.Type) bool {
 		return true
 	}
 
+	if t.XGoAlias != nil {
+		return true
+	}
+
 	if ext := t.GoJSONSchemaExtension; ext != nil && ext.Type != nil && strings.TrimSpace(*ext.Type) != "" {
 		return true
 	}
@@ -2768,7 +2874,7 @@ func (g *schemaGenerator) validateRefNamingOwnership(wrapper *schemas.Type, wrap
 		// Rule 1: unnamed wrapper referencing a named target – hard error.
 		return fmt.Errorf(
 			"%w: wrapper %q is unnamed, but referenced schema %q defines name metadata "+
-				"(title/x-go-type/x-go-ref/goJSONSchema.type); add explicit naming on wrapper or remove naming from target",
+				"(title/x-go-type/x-go-ref/x-go-alias/goJSONSchema.type); add explicit naming on wrapper or remove naming from target",
 			errRefNamingOwnership, wrapperDesc, wrapper.Ref,
 		)
 
