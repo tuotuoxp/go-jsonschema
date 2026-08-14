@@ -1913,7 +1913,7 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 		qualifiedTarget = importAlias + "." + targetType
 	}
 
-	// Determine the declaration name (same logic as normal type declarations).
+	// Determine the declaration name. For x-go-alias schemas, prefer a title-derived name (when applicable) and otherwise fall back to the scoped unique name; x-go-type is intentionally ignored.
 	name := g.output.uniqueTypeName(scope)
 	if titleName := g.resolveTitleSchemaTypeName(t); titleName != "" {
 		name = titleName
