@@ -2373,6 +2373,7 @@ func TestGenerateRootXGoAliasOverridesObjectMaterialization(t *testing.T) {
 	require.True(t, ok)
 
 	generated := string(source)
+	require.Contains(t, generated, `"path/to/mypack"`)
 	require.Contains(t, generated, "type AliasedObject = mypack.CommonStruct")
 	require.NotContains(t, generated, "type AliasedObject struct")
 }
