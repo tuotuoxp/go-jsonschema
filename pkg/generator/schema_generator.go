@@ -1854,15 +1854,39 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 	importPath := strings.TrimSpace(ext.Path)
 	var qualifiedTarget string
 
-	if importPath == "" {
+	if importPath == "" || g.isSamePackageXGoRefImport(importPath) {
 		// Local alias: reference a type in the current package.
 		qualifiedTarget = targetType
 	} else {
 		// External alias: derive or use explicit import alias.
+		existingAlias := ""
+		hasImport := false
+		for _, imp := range g.output.file.Package.Imports {
+			if imp.QualifiedName == importPath {
+				hasImport = true
+				existingAlias = imp.Name
+				break
+			}
+		}
+
 		importAlias := strings.TrimSpace(ext.Alias)
 		if importAlias == "" {
-			// Default: derive package name from the last path segment.
-			importAlias = path.Base(importPath)
+			if hasImport && existingAlias != "" {
+				importAlias = existingAlias
+			} else {
+				// Default: derive package name from the last path segment.
+				importAlias = path.Base(importPath)
+			}
+		}
+
+		if hasImport && existingAlias != importAlias {
+			return nil, fmt.Errorf(
+				"x-go-alias for schema %q imports %q as %q, but it is already imported as %q",
+				scope.string(),
+				importPath,
+				importAlias,
+				existingAlias,
+			)
 		}
 
 		if err := validateGoIdentifier(importAlias, "x-go-alias.alias", scope.string()); err != nil {
