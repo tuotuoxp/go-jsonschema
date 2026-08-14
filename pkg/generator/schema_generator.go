@@ -408,12 +408,8 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 		}
 	}
 
-	if schemaType.Ref != "" && schemaType.Title != "" {
-		return g.caser.Identifierize(schemaType.Title)
-	}
-
-	if g.config.StructNameFromTitle && schemaType.Title != "" {
-		return g.caser.Identifierize(schemaType.Title)
+	if titleName := g.resolveTitleSchemaTypeName(schemaType); titleName != "" {
+		return titleName
 	}
 
 	return fallback
@@ -424,6 +420,18 @@ func (g *Generator) resolveAliasSchemaTypeName(schemaType *schemas.Type, fallbac
 		return fallback
 	}
 
+	if titleName := g.resolveTitleSchemaTypeName(schemaType); titleName != "" {
+		return titleName
+	}
+
+	return fallback
+}
+
+func (g *Generator) resolveTitleSchemaTypeName(schemaType *schemas.Type) string {
+	if schemaType == nil {
+		return ""
+	}
+
 	if schemaType.Ref != "" && schemaType.Title != "" {
 		return g.caser.Identifierize(schemaType.Title)
 	}
@@ -432,7 +440,7 @@ func (g *Generator) resolveAliasSchemaTypeName(schemaType *schemas.Type, fallbac
 		return g.caser.Identifierize(schemaType.Title)
 	}
 
-	return fallback
+	return ""
 }
 
 func explicitXGoTypeName(xGoType string) string {
