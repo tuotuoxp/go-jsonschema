@@ -1847,6 +1847,9 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 	if targetType == "" {
 		return nil, fmt.Errorf("x-go-alias.type must not be empty for schema %q", scope.string())
 	}
+	if err := validateGoIdentifier(targetType, "x-go-alias.type", scope.string()); err != nil {
+		return nil, err
+	}
 
 	importPath := strings.TrimSpace(ext.Path)
 	var qualifiedTarget string
