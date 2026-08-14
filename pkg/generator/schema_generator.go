@@ -1860,10 +1860,10 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 		if importAlias == "" {
 			// Default: derive package name from the last path segment.
 			importAlias = path.Base(importPath)
-		} else {
-			if err := validateGoIdentifier(importAlias, "x-go-alias.alias", scope.string()); err != nil {
-				return nil, err
-			}
+		}
+
+		if err := validateGoIdentifier(importAlias, "x-go-alias.alias", scope.string()); err != nil {
+			return nil, err
 		}
 
 		g.output.file.Package.AddImport(importPath, importAlias)
