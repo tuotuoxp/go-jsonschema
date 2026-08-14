@@ -415,18 +415,6 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 	return fallback
 }
 
-func (g *Generator) resolveAliasSchemaTypeName(schemaType *schemas.Type, fallback string) string {
-	if schemaType == nil {
-		return fallback
-	}
-
-	if titleName := g.resolveTitleSchemaTypeName(schemaType); titleName != "" {
-		return titleName
-	}
-
-	return fallback
-}
-
 func (g *Generator) resolveTitleSchemaTypeName(schemaType *schemas.Type) string {
 	if schemaType == nil {
 		return ""
@@ -1926,7 +1914,10 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 	}
 
 	// Determine the declaration name (same logic as normal type declarations).
-	name := g.resolveAliasSchemaTypeName(t, g.output.uniqueTypeName(scope))
+	name := g.output.uniqueTypeName(scope)
+	if titleName := g.resolveTitleSchemaTypeName(t); titleName != "" {
+		name = titleName
+	}
 
 	// Register a TypeDecl for cache lookup and NamedType references.
 	// The TypeDecl itself is NOT added to the file; AliasType handles emission.
