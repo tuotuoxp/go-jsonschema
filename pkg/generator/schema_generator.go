@@ -418,6 +418,22 @@ func (g *Generator) resolveSchemaTypeName(schemaType *schemas.Type, fallback str
 	return fallback
 }
 
+func (g *Generator) resolveAliasSchemaTypeName(schemaType *schemas.Type, fallback string) string {
+	if schemaType == nil {
+		return fallback
+	}
+
+	if schemaType.Ref != "" && schemaType.Title != "" {
+		return g.caser.Identifierize(schemaType.Title)
+	}
+
+	if g.config.StructNameFromTitle && schemaType.Title != "" {
+		return g.caser.Identifierize(schemaType.Title)
+	}
+
+	return fallback
+}
+
 func explicitXGoTypeName(xGoType string) string {
 	xGoType = strings.TrimSpace(xGoType)
 	if xGoType == "" || !goIdentifierRe.MatchString(xGoType) {
@@ -1901,10 +1917,7 @@ func (g *schemaGenerator) generateXGoAliasDecl(t *schemas.Type, scope nameScope)
 	}
 
 	// Determine the declaration name (same logic as normal type declarations).
-	name := g.output.uniqueTypeName(scope)
-	if g.config.StructNameFromTitle && t.Title != "" {
-		name = g.caser.Identifierize(t.Title)
-	}
+	name := g.resolveAliasSchemaTypeName(t, g.output.uniqueTypeName(scope))
 
 	// Register a TypeDecl for cache lookup and NamedType references.
 	// The TypeDecl itself is NOT added to the file; AliasType handles emission.

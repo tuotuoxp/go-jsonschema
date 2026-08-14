@@ -197,6 +197,10 @@ func (g *Generator) getRootTypeName(schema *schemas.Schema, fileName string) str
 
 	fallback := g.caser.IdentifierFromFileName(fileName)
 
+	if rootType := (*schemas.Type)(schema.ObjectAsType); rootType != nil && rootType.XGoAlias != nil {
+		return g.resolveAliasSchemaTypeName(rootType, fallback)
+	}
+
 	return g.resolveSchemaTypeName((*schemas.Type)(schema.ObjectAsType), fallback)
 }
 
